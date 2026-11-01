@@ -96,3 +96,75 @@ def epic_files_for(source, manifests=None, launcher_file=None):
     if os.path.isfile(dat):
         found.append(dat)
     return found
+
+
+def _record(tool, root, folders, files, rewrites, check):
+    return {
+        "id": new_id(),
+        "kind": "native",
+        "name": tool.name,
+        "tool": tool.id,
+        "source": folders[0][0],
+        "target": folders[0][1],
+        "backup": folders[0][0] + BACKUP_SUFFIX,
+        "root": normalize_root(root),
+        "bytes": check.size,
+        "files": check.files,
+        "created": int(time.time()),
+        "pointer": False,
+        "processes": list(tool.processes),
+        "folders": [{"source": source, "target": target, "backup": source + BACKUP_SUFFIX} for source, target in folders],
+        "plain_files": [{"source": source, "target": target, "backup": source + BACKUP_SUFFIX} for source, target in files],
+        "rewrites": list(rewrites),
+    }
+
+
+def _paused(journal, source):
+    for record in journal.records():
+        if record.get("kind") == "native" and record["state"] == preflight.PAUSED and key(record["source"]) == key(source):
+            return record
+    return None
+
+
+def _remove_targets(record):
+    stop = normalize_root(record["root"])
+    for pair in record["folders"] + record["plain_files"]:
+        remove_tree(pair["target"])
+        prune_empty(pair["target"], stop)
+
+
+def _forward_rewrites(record):
+    for path in record["rewrites"]:
+        rewrite_json(path, record["source"], record["target"])
+
+
+def _reverse_rewrites(record):
+    for path in record["rewrites"]:
+        rewrite_json(path, record["target"], record["source"])
+
+
+def _copy_everything(record, progress, cancel, resume):
+    for pair in record["folders"]:
+        os.makedirs(long_path(os.path.dirname(pair["target"])), exist_ok=True)
+        if record["tool"].startswith(EPIC_PREFIX) and elevation.is_admin():
+            acl.lock_chain(os.path.dirname(pair["target"]), os.path.dirname(pair["target"]))
+        size = measure(pair["source"])[0]
+        copy_and_verify(pair["source"], pair["target"], size, progress, cancel, resume and os.path.isdir(pair["target"]))
+    for pair in record["plain_files"]:
+        os.makedirs(long_path(os.path.dirname(pair["target"])), exist_ok=True)
+        shutil.copy2(long_path(pair["source"]), long_path(pair["target"]))
+
+
+def _switch(record):
+    _forward_rewrites(record)
+    for pair in record["folders"] + record["plain_files"]:
+        os.rename(long_path(pair["source"]), long_path(pair["backup"]))
+
+
+def _unswitch(record, journal):
+    for pair in record["folders"] + record["plain_files"]:
+        if os.path.lexists(pair["backup"]) and not os.path.lexists(pair["source"]):
+            os.rename(long_path(pair["backup"]), long_path(pair["source"]))
+    _reverse_rewrites(record)
+    _remove_targets(record)
+    journal.remove(record["id"])
