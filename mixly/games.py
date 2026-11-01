@@ -89,3 +89,15 @@ def epic_games(manifests=None):
         name = values.get("DisplayName") or os.path.basename(path)
         games.append(Tool(f"epic:{values.get('AppName', name)}", name, os.path.normpath(path), (), EPIC))
     return games
+
+
+def gog_games():
+    root = r"SOFTWARE\WOW6432Node\GOG.com\Games"
+    games = []
+    for child in _registry_children(winreg.HKEY_LOCAL_MACHINE, root):
+        key = f"{root}\\{child}"
+        path = _registry_value(winreg.HKEY_LOCAL_MACHINE, key, "path")
+        if path and os.path.isdir(path):
+            name = _registry_value(winreg.HKEY_LOCAL_MACHINE, key, "gameName") or os.path.basename(path)
+            games.append(Tool(f"gog:{child}", name, os.path.normpath(path), (), GOG))
+    return games
