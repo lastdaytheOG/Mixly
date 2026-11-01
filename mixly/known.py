@@ -124,3 +124,23 @@ def _discard(record, journal):
     remove_tree(record["target"])
     prune_empty(record["target"], normalize_root(record["root"]))
     journal.remove(record["id"])
+
+
+def finish(record_id, journal, api=None):
+    record = journal.get(record_id)
+    if record["state"] == "finished":
+        return record
+    if not os.path.isdir(record["target"]):
+        raise MoveError(f"{record['target']} is missing")
+    if key((api or WindowsFolders()).get(_folder_id(record["known"]))) != key(record["target"]):
+        raise MoveError(f"Windows no longer uses {record['target']} for {record['name']}, so the old copy stays")
+    leftover = record["source"]
+    for entry in os.listdir(long_path(leftover)) if os.path.isdir(long_path(leftover)) else []:
+        remove_tree(os.path.join(leftover, entry))
+    try:
+        os.rmdir(long_path(leftover))
+    except OSError:
+        pass
+    record["state"] = "finished"
+    journal.put(record)
+    return record
