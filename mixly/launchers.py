@@ -70,3 +70,29 @@ def rewrite_json(path, old, new):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+
+
+def epic_manifests():
+    return os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Epic", "EpicGamesLauncher", "Data", "Manifests")
+
+
+def epic_launcher_file():
+    return os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Epic", "UnrealEngineLauncher", "LauncherInstalled.dat")
+
+
+def epic_files_for(source, manifests=None, launcher_file=None):
+    found = []
+    for item in glob.glob(os.path.join(glob.escape(manifests or epic_manifests()), "*.item")):
+        try:
+            with open(item, encoding="utf-8") as handle:
+                values = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if key(values.get("InstallLocation", "")) == key(source):
+            found.append(item)
+    if not found:
+        raise MoveError(f"couldn't find Epic's record for {source}")
+    dat = launcher_file or epic_launcher_file()
+    if os.path.isfile(dat):
+        found.append(dat)
+    return found
