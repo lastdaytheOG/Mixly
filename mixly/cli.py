@@ -6,17 +6,25 @@ from .catalog import by_id
 from .copier import Cancelled, CopyError
 from .environment import RegistryEnv
 from .journal import Busy, Journal
-from .scan import Found, scan
+from .scan import APPS, DEVELOPER, GAMES, Found, scan
 from .volumes import format_size, list_drives
+
+
+CATEGORIES = {"tools": DEVELOPER, "games": GAMES, "apps": APPS}
 
 
 def _print_found(items):
     for item in items:
-        print(f"{item.id:<22}{format_size(item.size):>12}  {item.status:<18}{item.source}")
+        note = f"  ({item.reason})" if item.reason else ""
+        print(f"{item.id:<22}{format_size(item.size):>12}  {item.status:<18}{item.source}{note}")
+
+
+def _in_category(item, category):
+    return category == "all" or item.category == CATEGORIES[category]
 
 
 def _command_scan(arguments, journal, store):
-    items = scan(journal)
+    items = [item for item in scan(journal) if _in_category(item, arguments.category)]
     _print_found(items)
     total = sum(item.size for item in items if item.status == "ready")
     print(f"\n{format_size(total)} can be moved")
@@ -33,7 +41,7 @@ def _selection(arguments, journal):
     available = {item.id: item for item in scan(journal)} if arguments.all or arguments.ids else {}
     chosen = []
     if arguments.all:
-        chosen = [item for item in available.values() if item.status == "ready"]
+        chosen = [item for item in available.values() if item.status == "ready" and _in_category(item, arguments.category)]
     for name in arguments.ids:
         if name not in available:
             raise SystemExit(f"{name} wasn't found. Run: mixly scan")
@@ -86,8 +94,7 @@ def _command_status(arguments, journal, store):
 
 
 def _command_undo(arguments, journal, store):
-    actions.undo_record(journal.get(arguments.id), journal, store, _Progress())
-    print(f"\r{arguments.id} is back where it started")
+    print("\r" + actions.undo_record(journal.get(arguments.id), journal, store, _Progress()))
     return 0
 
 
@@ -121,12 +128,15 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="mixly", description="Move developer tools to another drive and keep them working.")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("scan", help="find what can be moved").set_defaults(run=_command_scan)
+    scan_command = commands.add_parser("scan", help="find what can be moved")
+    scan_command.add_argument("--category", choices=("tools", "games", "apps", "all"), default="all")
+    scan_command.set_defaults(run=_command_scan)
     commands.add_parser("drives", help="list internal drives").set_defaults(run=_command_drives)
     move = commands.add_parser("move", help="move tools or folders to another drive")
     move.add_argument("ids", nargs="*")
     move.add_argument("--to", required=True)
     move.add_argument("--all", action="store_true")
+    move.add_argument("--category", choices=("tools", "games", "apps", "all"), default="tools")
     move.add_argument("--path", action="append", default=[])
     move.add_argument("--yes", action="store_true")
     move.set_defaults(run=_command_move)
