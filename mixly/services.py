@@ -26,3 +26,28 @@ def image_path(raw):
         if index >= 0:
             return value[: index + len(extension)]
     return value
+
+
+def list_services():
+    services = []
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, SERVICES) as root:
+        index = 0
+        while True:
+            try:
+                name = winreg.EnumKey(root, index)
+            except OSError:
+                return services
+            index += 1
+            try:
+                with winreg.OpenKey(root, name) as entry:
+                    raw = winreg.QueryValueEx(entry, "ImagePath")[0]
+            except OSError:
+                continue
+            path = os.path.expandvars(image_path(str(raw)))
+            if os.path.isabs(path) and path[1:2] == ":":
+                services.append(Service(name, path))
+
+
+def in_folder(folder, listing=None):
+    available = list_services() if listing is None else listing
+    return [service for service in available if is_within(service.path, folder)]
