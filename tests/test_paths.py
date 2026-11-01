@@ -26,3 +26,20 @@ class PathTests(unittest.TestCase):
     def test_rebase(self):
         self.assertEqual(rebase(r"C:\old\bin", r"C:\old", r"D:\new"), r"D:\new\bin")
         self.assertEqual(rebase(r"C:\old", r"C:\old", r"D:\new"), r"D:\new")
+
+
+class ProtectedTests(unittest.TestCase):
+    def test_refuses_a_whole_drive(self):
+        self.assertIsNotNone(protected_reason("C:\\"))
+
+    def test_refuses_windows_and_program_files(self):
+        self.assertIsNotNone(protected_reason(os.environ["windir"]))
+        self.assertIsNotNone(protected_reason(os.path.join(os.environ["ProgramFiles"], "Docker")))
+
+    def test_refuses_the_profile_and_appdata(self):
+        self.assertIsNotNone(protected_reason(os.environ["USERPROFILE"]))
+        self.assertIsNotNone(protected_reason(os.environ["LOCALAPPDATA"]))
+        self.assertIsNotNone(protected_reason(os.environ["APPDATA"]))
+
+    def test_allows_a_tool_folder(self):
+        self.assertIsNone(protected_reason(os.path.join(os.environ["USERPROFILE"], ".cargo")))
