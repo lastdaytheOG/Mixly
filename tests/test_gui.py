@@ -7,6 +7,7 @@ from mixly.catalog import Tool
 from mixly.gui import App
 from mixly.journal import Journal
 from mixly.links import is_junction
+from mixly.scan import DEVELOPER, GAMES, STAYS, Found
 from tests.helpers import MemoryEnv, TempCase
 
 
@@ -25,7 +26,7 @@ class GuiTests(TempCase):
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
-        self.app = App(self.root, self.journal, MemoryEnv(), (self.tool,), include_wsl=False)
+        self.app = App(self.root, self.journal, MemoryEnv(), (self.tool,), include_wsl=False, include_installed=False)
         self.app.selected_root = lambda: self.path("dest")
         self.settle()
 
@@ -80,6 +81,27 @@ class GuiTests(TempCase):
             self.app.start_finish(ask=False)
             self.settle()
         self.assertFalse(os.path.lexists(self.tool.source))
+
+    def test_move_everything_only_takes_what_is_shown(self):
+        self.write("game/a.txt")
+        self.app._show_found(Found("steam:1", "Game", self.path("game"), 1, "ready", category=GAMES))
+        self.app.start_move_everything(ask=False)
+        self.settle()
+        self.assertTrue(is_junction(self.tool.source))
+        self.assertFalse(is_junction(self.path("game")))
+
+    def test_filter_shows_one_category(self):
+        self.app._show_found(Found("steam:1", "Game", self.path("game"), 1, "ready", category=GAMES))
+        self.assertEqual(self.app.tree.get_children(), ("tool",))
+        self.app.show.set(GAMES)
+        self.app._refresh_rows()
+        self.assertEqual(self.app.tree.get_children(), ("steam:1",))
+
+    def test_a_blocked_row_cant_be_ticked_and_says_why(self):
+        self.app._show_found(Found("app:1", "App", self.path("app"), 1, STAYS, category=DEVELOPER, reason="it runs a service"))
+        self.app.toggle("app:1")
+        self.assertNotIn("app:1", self.app.checked)
+        self.assertIn("it runs a service", self.app.log.get("1.0", "end"))
 
     def test_move_with_nothing_ticked_changes_nothing(self):
         self.app.start_move()
