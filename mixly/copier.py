@@ -5,7 +5,7 @@ import stat
 from dataclasses import dataclass
 
 from .acl import copy_root_permissions
-from .links import create_junction
+from .links import create_junction, remove_tree
 from .paths import is_within, long_path, rebase, strip_extended
 
 CHUNK = 1024 * 1024
@@ -137,12 +137,23 @@ def _copy_link(source_path, target_path, source_root, target_root, kind, info):
     return resolved
 
 
-def copy_tree(source, target, on_bytes=None, cancel=None):
+def _reuse_copied_file(source_path, target_path, info, on_bytes, cancel):
+    try:
+        existing = os.lstat(target_path)
+    except FileNotFoundError:
+        return None
+    if kind_of(existing) == "file" and existing.st_size == info.st_size and existing.st_mtime_ns == info.st_mtime_ns:
+        return _hash_file(source_path, on_bytes, cancel)
+    remove_tree(target_path)
+    return None
+
+
+def copy_tree(source, target, on_bytes=None, cancel=None, resume=False):
     manifest = {}
     source_base, target_base = long_path(source), long_path(target)
     folders = [("", os.lstat(source_base))]
     links = []
-    os.makedirs(target_base)
+    os.makedirs(target_base, exist_ok=resume)
     copy_root_permissions(source, target)
     for relative, kind, info in walk(source):
         if cancel is not None and cancel.is_set():
@@ -155,7 +166,9 @@ def copy_tree(source, target, on_bytes=None, cancel=None):
             manifest[relative] = Item("dir")
         elif kind == "file":
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            digest = _copy_file(source_path, target_path, info, on_bytes, cancel)
+            digest = _reuse_copied_file(source_path, target_path, info, on_bytes, cancel) if resume else None
+            if digest is None:
+                digest = _copy_file(source_path, target_path, info, on_bytes, cancel)
             manifest[relative] = Item("file", info.st_size, digest, info.st_mtime_ns)
         elif kind in ("junction", "symlink"):
             links.append((relative, kind, info))
@@ -165,6 +178,8 @@ def copy_tree(source, target, on_bytes=None, cancel=None):
         source_path = os.path.join(source_base, relative)
         target_path = os.path.join(target_base, relative)
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        if resume and os.path.lexists(target_path):
+            remove_tree(target_path)
         link = _copy_link(source_path, target_path, source, target, kind, info)
         manifest[relative] = Item(kind, link=link)
     for relative, info in sorted(folders, key=lambda folder: -len(folder[0])):
