@@ -1,11 +1,13 @@
 import ctypes
+import os
 import re
 from ctypes import wintypes
 
-from .paths import long_path
+from .paths import is_within, key, long_path
 
 DACL_SECURITY_INFORMATION = 0x4
 SDDL_REVISION_1 = 1
+LOCKED = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"
 ACE = re.compile(r"\(([^;()]*);([^;()]*);")
 
 _advapi = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -83,6 +85,19 @@ def write_dacl(path, sddl):
             _fail()
     finally:
         _kernel.LocalFree(descriptor)
+
+
+def lock_chain(top, folder):
+    if not is_within(folder, top) or os.path.dirname(os.path.abspath(top)) == os.path.abspath(top):
+        raise ValueError(f"{folder} can't be locked from {top}")
+    os.makedirs(long_path(folder), exist_ok=True)
+    current = os.path.abspath(folder)
+    limit = key(top)
+    while True:
+        write_dacl(current, LOCKED)
+        if key(current) == limit:
+            return
+        current = os.path.dirname(current)
 
 
 def copy_root_permissions(source, target):
