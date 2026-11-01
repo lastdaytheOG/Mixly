@@ -214,3 +214,84 @@ def move_epic(tool, root, journal, progress=None, cancel=None, names=None, manif
     target = os.path.join(normalize_root(root), "Epic Games", os.path.basename(source))
     rewrites = epic_files_for(source, manifests, launcher_file)
     return relocate(tool, root, [(source, target)], [], rewrites, journal, progress, cancel, names, same_drive_ok)
+
+
+def finish(record_id, journal):
+    record = journal.get(record_id)
+    if record["state"] not in MOVED_STATES:
+        raise MoveError(f"{record['name']} can't be finished from state {record['state']}")
+    for pair in record["folders"]:
+        if not os.path.isdir(pair["target"]):
+            raise MoveError(f"{pair['target']} is missing")
+    for pair in record["folders"] + record["plain_files"]:
+        remove_tree(pair["backup"])
+    record["state"] = "finished"
+    journal.put(record)
+    return record
+
+
+def undo(record_id, journal, progress=None, cancel=None, names=None):
+    record = journal.get(record_id)
+    if record["state"] == preflight.PAUSED:
+        _remove_targets(record)
+        journal.remove(record["id"])
+        return f"{record['name']}: the paused move was discarded, and nothing else changed."
+    if record["state"] not in MOVED_STATES:
+        raise MoveError(f"{record['name']} can't be undone from state {record['state']}")
+    active = processes.still_running(record.get("processes", []), names)
+    active += sorted({os.path.basename(path) for path in processes.running_from(record["target"])})
+    if active:
+        raise MoveError(f"close {', '.join(active)} first")
+    needed = sum(measure(pair["target"])[0] for pair in record["folders"])
+    if volumes.free_bytes(volumes.drive_of(record["source"])) < needed:
+        raise MoveError(f"not enough free space on {volumes.drive_of(record['source'])}")
+    restores = []
+    try:
+        for pair in record["folders"]:
+            restore = pair["source"] + RESTORE_SUFFIX
+            restores.append(restore)
+            remove_tree(restore)
+            copy_and_verify(pair["target"], restore, measure(pair["target"])[0], progress, cancel)
+        for pair in record["plain_files"]:
+            restore = pair["source"] + RESTORE_SUFFIX
+            restores.append(restore)
+            shutil.copy2(long_path(pair["target"]), long_path(restore))
+    except BaseException:
+        for restore in restores:
+            remove_tree(restore)
+        raise
+    _complete_undo(record, journal)
+    return f"{record['name']} is back where it started."
+
+
+def _complete_undo(record, journal):
+    record["previous_state"] = record["state"]
+    record["state"] = "restoring"
+    journal.put(record)
+    for pair in record["folders"] + record["plain_files"]:
+        restore = pair["source"] + RESTORE_SUFFIX
+        if os.path.lexists(restore):
+            os.rename(long_path(restore), long_path(pair["source"]))
+    _reverse_rewrites(record)
+    for pair in record["folders"] + record["plain_files"]:
+        remove_tree(pair["backup"])
+    _remove_targets(record)
+    journal.remove(record["id"])
+
+
+def recover(journal):
+    messages = []
+    for record in journal.records():
+        if record.get("kind") != "native":
+            continue
+        if record["state"] == "copying":
+            record["state"] = preflight.PAUSED
+            journal.put(record)
+            messages.append(f"{record['name']}: the move was interrupted. Move it again to continue from where it stopped")
+        elif record["state"] == "switching":
+            _unswitch(record, journal)
+            messages.append(f"{record['name']}: the move was interrupted, so it was put back")
+        elif record["state"] == "restoring":
+            _complete_undo(record, journal)
+            messages.append(f"{record['name']}: finished the interrupted undo")
+    return messages
