@@ -5,17 +5,20 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import actions, elevation, mover, volumes, wsl
+from . import actions, elevation, planner, spacefinder, volumes
 from .catalog import CATALOG
-from .copier import Cancelled, CopyError
+from .copier import Cancelled
 from .environment import RegistryEnv
-from .journal import Busy, Journal
-from .scan import APPS, DEVELOPER, GAMES, STAYS, Found, scan
+from .journal import Journal
+from .scan import APPS, CACHES, CAN_CLEAR, DATA, DEVELOPER, GAMES, LARGE, PAUSED, PERSONAL, STAYS, STORE, Found, scan
 
-ERRORS = (mover.MoveError, wsl.WslError, CopyError, OSError, Busy, KeyError)
 CHECKED = "☑"
 UNCHECKED = "☐"
 EVERYTHING = "Everything"
+FILTERS = (DEVELOPER, GAMES, APPS, DATA, PERSONAL, STORE, CACHES, LARGE, EVERYTHING)
+MOVABLE = ("ready", PAUSED)
+UNDOABLE = ("moved", "finished", PAUSED)
+TICKABLE = ("ready", PAUSED, "moved", "finished", CAN_CLEAR)
 
 
 class App(ttk.Frame):
@@ -32,6 +35,7 @@ class App(ttk.Frame):
         self.working = False
         self.rows = {}
         self.checked = set()
+        self.large = []
         self._build()
         self.poll = self.after(100, self._drain)
         self.recover_and_scan()
@@ -42,13 +46,13 @@ class App(ttk.Frame):
 
     def _build(self):
         self.master.title("Mixly")
-        self.master.geometry("920x620")
-        self.master.minsize(720, 480)
+        self.master.geometry("1080x680")
+        self.master.minsize(900, 520)
         self.pack(fill="both", expand=True)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
-        ttk.Label(self, text="Move your tools, games and apps to another drive", font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(self, text="Free up space on your system drive", font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
 
         bar = ttk.Frame(self)
         bar.grid(row=1, column=0, sticky="ew", pady=(10, 8))
@@ -56,14 +60,16 @@ class App(ttk.Frame):
         self.drive = ttk.Combobox(bar, state="readonly", width=30)
         self.drive.pack(side="left", padx=(6, 12))
         ttk.Label(bar, text="Show").pack(side="left")
-        self.show = ttk.Combobox(bar, state="readonly", width=15, values=(DEVELOPER, GAMES, APPS, EVERYTHING))
+        self.show = ttk.Combobox(bar, state="readonly", width=18, values=FILTERS)
         self.show.current(0)
         self.show.pack(side="left", padx=(6, 12))
         self.show.bind("<<ComboboxSelected>>", lambda event: self._refresh_rows())
         self.scan_button = ttk.Button(bar, text="Scan again", command=self.start_scan)
         self.scan_button.pack(side="left")
+        self.space_button = ttk.Button(bar, text="Find large folders", command=self.start_space)
+        self.space_button.pack(side="left", padx=6)
         self.add_button = ttk.Button(bar, text="Add folder", command=self.add_folder)
-        self.add_button.pack(side="left", padx=6)
+        self.add_button.pack(side="left")
         self.total = ttk.Label(bar, text="")
         self.total.pack(side="right")
 
@@ -75,10 +81,10 @@ class App(ttk.Frame):
         self.tree = ttk.Treeview(table, columns=columns, show="headings", selectmode="browse")
         for column, title, width, anchor, stretch in (
             ("pick", "", 34, "center", False),
-            ("name", "Tool", 200, "w", False),
+            ("name", "Name", 230, "w", False),
             ("size", "Size", 84, "e", False),
             ("status", "Status", 110, "w", False),
-            ("path", "Location", 420, "w", True),
+            ("path", "Location", 520, "w", True),
         ):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, anchor=anchor, stretch=stretch)
@@ -98,8 +104,10 @@ class App(ttk.Frame):
         self.undo_button.pack(side="left")
         self.finish_button = ttk.Button(actions_bar, text="Delete old copies", command=self.start_finish)
         self.finish_button.pack(side="left", padx=6)
+        self.clear_button = ttk.Button(actions_bar, text="Clear selected caches", command=self.start_clear)
+        self.clear_button.pack(side="left")
         self.remove_links = tk.BooleanVar(value=False)
-        ttk.Checkbutton(actions_bar, text="Also remove links that aren't needed", variable=self.remove_links).pack(side="left")
+        ttk.Checkbutton(actions_bar, text="Also remove links that aren't needed", variable=self.remove_links).pack(side="left", padx=8)
         self.stop_button = ttk.Button(actions_bar, text="Stop", command=self.cancel.set, state="disabled")
         self.stop_button.pack(side="right")
 
@@ -111,19 +119,16 @@ class App(ttk.Frame):
 
     def _load_drives(self):
         self.drives = volumes.list_drives()
-        system = volumes.drive_of(self.tools[0].source) if self.tools else ""
-        choices = []
-        for drive in self.drives:
-            label = f"{drive.root}  {drive.label or 'Local Disk'}  ({volumes.format_size(drive.free)} free)"
-            choices.append(label)
-        self.drive["values"] = choices
+        system = os.environ.get("SystemDrive", "C:").upper()
+        self.drive["values"] = [
+            f"{drive.root}  {drive.label or 'Local Disk'}  ({volumes.format_size(drive.free)} free)" for drive in self.drives
+        ]
         for index, drive in enumerate(self.drives):
             if f"{drive.letter}:" != system:
                 self.drive.current(index)
-                break
-        else:
-            if choices:
-                self.drive.current(0)
+                return
+        if self.drives:
+            self.drive.current(0)
 
     def selected_root(self):
         index = self.drive.current()
@@ -146,12 +151,14 @@ class App(ttk.Frame):
         if found.status == STAYS:
             self.write(f"{found.name} stays put: {found.reason}.")
             return
-        if found.status not in ("ready", "moved", "finished"):
+        if found.status not in TICKABLE:
             return
         if row in self.checked:
             self.checked.remove(row)
         else:
             self.checked.add(row)
+            if found.note:
+                self.write(f"{found.name}: {found.note}.")
         if self.tree.exists(row):
             self.tree.set(row, "pick", CHECKED if row in self.checked else UNCHECKED)
 
@@ -163,8 +170,12 @@ class App(ttk.Frame):
         return (pick, found.name, volumes.format_size(found.size) if found.size else "", found.status, found.source)
 
     def _update_total(self):
-        ready = sum(item.size for item in self.rows.values() if item.status == "ready" and self._visible(item))
-        self.total.configure(text=f"{volumes.format_size(ready)} can be moved")
+        ready = sum(item.size for item in self.rows.values() if item.status in MOVABLE and self._visible(item))
+        clearable = sum(item.size for item in self.rows.values() if item.status == CAN_CLEAR and self._visible(item))
+        text = f"{volumes.format_size(ready)} can be moved"
+        if clearable:
+            text = f"{volumes.format_size(clearable)} can be cleared"
+        self.total.configure(text=text)
 
     def _refresh_rows(self):
         self.tree.delete(*self.tree.get_children())
@@ -185,7 +196,16 @@ class App(ttk.Frame):
     def _set_working(self, working):
         self.working = working
         state = "disabled" if working else "normal"
-        for button in (self.scan_button, self.add_button, self.move_all_button, self.move_button, self.undo_button, self.finish_button):
+        for button in (
+            self.scan_button,
+            self.space_button,
+            self.add_button,
+            self.move_all_button,
+            self.move_button,
+            self.undo_button,
+            self.finish_button,
+            self.clear_button,
+        ):
             button.configure(state=state)
         self.stop_button.configure(state="normal" if working else "disabled")
         if not working:
@@ -201,7 +221,9 @@ class App(ttk.Frame):
             try:
                 with self.journal.lock():
                     work()
-            except ERRORS as error:
+            except Cancelled:
+                self.events.put(("log", "Stopped."))
+            except actions.ERRORS as error:
                 self.events.put(("log", str(error)))
             except Exception as error:
                 self.events.put(("log", f"Something went wrong: {error}"))
@@ -219,6 +241,9 @@ class App(ttk.Frame):
                     self.write(value)
                 elif kind == "progress":
                     self.progress["value"] = value
+                elif kind == "show":
+                    self.show.set(value)
+                    self._refresh_rows()
                 elif kind == "reset":
                     self.tree.delete(*self.tree.get_children())
                     self.rows.clear()
@@ -241,18 +266,54 @@ class App(ttk.Frame):
             lambda item: self.events.put(("found", item)),
             self.include_installed,
         )
-        for record in self.journal.records():
-            if not any(item.source.lower() == record["source"].lower() or item.distro == record.get("distro") for item in found):
-                self.events.put(("found", Found(record["source"], record["name"], record["source"], 0, "moved")))
+        records = self.journal.records()
+        for record in records:
+            if not any(self._matches(item, record) for item in found):
+                category = record.get("category", DEVELOPER)
+                status = PAUSED if record["state"] == PAUSED else "moved"
+                self.events.put(("found", Found(record["source"], record["name"], record["source"], 0, status, category=category)))
+        states = {record["source"].lower(): record["state"] for record in records}
+        for item in self.large:
+            state = states.get(item.source.lower())
+            if state:
+                item.status = PAUSED if state == PAUSED else "moved"
+            elif item.status in ("moved", PAUSED):
+                item.status = "ready"
+            if not any(item.source.lower() == other.source.lower() for other in found):
+                self.events.put(("found", item))
+
+    @staticmethod
+    def _matches(item, record):
+        if record.get("distro") and item.distro == record["distro"]:
+            return True
+        if record.get("known") and item.known == record["known"]:
+            return True
+        if record.get("package") and item.package == record["package"]:
+            return True
+        return item.source.lower() == record["source"].lower() and not item.status.startswith("already")
 
     def start_scan(self):
         self._run(self._scan_work)
 
     def recover_and_scan(self):
         def work():
-            for message in mover.recover(self.journal, self.store):
+            for message in actions.recover(self.journal, self.store):
                 self.events.put(("log", message))
             self._scan_work()
+
+        self._run(work)
+
+    def start_space(self):
+        root = f"{os.environ.get('SystemDrive', 'C:')}\\"
+        self.space_root = getattr(self, "space_root", root)
+
+        def work():
+            self.events.put(("log", f"Reading {self.space_root}, which can take a few minutes..."))
+            self.events.put(("show", LARGE))
+            self.large = spacefinder.find(self.space_root, self.journal, getattr(self, "space_minimum", spacefinder.GIGABYTE), cancel=self.cancel)
+            for item in self.large:
+                self.events.put(("found", item))
+            self.events.put(("log", f"Found {len(self.large)} large items."))
 
         self._run(work)
 
@@ -273,31 +334,49 @@ class App(ttk.Frame):
 
     def _record_for(self, found):
         for record in self.journal.records():
-            if record["source"].lower() == found.source.lower() or (found.distro and record.get("distro") == found.distro):
+            if self._matches(found, record):
                 return record
         return None
 
     def start_move_everything(self, ask=True):
-        ready = [row for row, found in self.rows.items() if found.status == "ready" and self._visible(found)]
+        ready = [found for found in self.rows.values() if found.status in MOVABLE and self._visible(found)]
         if not ready:
             self.write("There's nothing ready to move.")
             return
-        size = volumes.format_size(sum(self.rows[row].size for row in ready))
-        if ask and not messagebox.askyesno(
-            "Move everything",
-            f"Move {len(ready)} items ({size}) to {self.selected_root()}?\n\nClose your tools first. Anything that's open or doesn't fit stays where it is.",
-        ):
+        root = self.selected_root()
+        if root is None:
+            self.write("Choose a drive to move to.")
             return
-        for row in ready:
-            if row not in self.checked:
+        chosen, left = planner.fit(ready, volumes.free_bytes(volumes.drive_of(root)))
+        if not chosen:
+            self.write(f"None of this fits on {root}.")
+            return
+        size = volumes.format_size(sum(found.size for found in chosen))
+        message = f"Move {len(chosen)} items ({size}) to {root}?\n\nClose them first. Anything that's open stays where it is."
+        if left:
+            names = ", ".join(found.name for found in left[:5])
+            more = f" and {len(left) - 5} more" if len(left) > 5 else ""
+            caches_size = sum(found.size for found in self.rows.values() if found.status == CAN_CLEAR)
+            message += f"\n\nThese won't fit and stay put: {names}{more}."
+            if caches_size:
+                message += f"\nClearing caches would also free {volumes.format_size(caches_size)} on your system drive."
+        if ask and not messagebox.askyesno("Move everything", message):
+            return
+        for found in left:
+            self.write(f"{found.name} ({volumes.format_size(found.size)}) doesn't fit on {root}, so it stays.")
+        for row in list(self.checked):
+            if self.rows[row] in left:
                 self.toggle(row)
+        for found in chosen:
+            if found.id not in self.checked:
+                self.toggle(found.id)
         self.start_move()
 
     def start_move(self):
-        chosen = self._chosen("ready")
+        chosen = self._chosen(*MOVABLE)
         root = self.selected_root()
         if not chosen:
-            self.write("Tick at least one tool that's ready to move.")
+            self.write("Tick at least one item that's ready to move.")
             return
         if root is None:
             self.write("Choose a drive to move to.")
@@ -312,18 +391,20 @@ class App(ttk.Frame):
                 try:
                     record = actions.move_found(found, root, self.journal, self.store, self._report_progress, self.cancel)
                     self.events.put(("log", f"{found.name} moved to {record['target']}."))
+                    if record.get("note"):
+                        self.events.put(("log", record["note"]))
                 except Cancelled:
-                    self.events.put(("log", f"{found.name}: stopped, and nothing was changed."))
-                except ERRORS as error:
+                    self.events.put(("log", f"{found.name}: paused. Move it again to continue, or undo it to discard the copy."))
+                except actions.ERRORS as error:
                     self.events.put(("log", f"{found.name} wasn't moved: {error}"))
             self._scan_work()
 
         self._run(work)
 
     def start_undo(self):
-        chosen = self._chosen("moved", "finished")
+        chosen = self._chosen(*UNDOABLE)
         if not chosen:
-            self.write("Tick at least one moved tool to undo.")
+            self.write("Tick at least one moved item to undo.")
             return
 
         def work():
@@ -337,7 +418,7 @@ class App(ttk.Frame):
                     self.events.put(("log", message))
                 except Cancelled:
                     self.events.put(("log", f"{found.name}: stopped, so it stays moved."))
-                except ERRORS as error:
+                except actions.ERRORS as error:
                     self.events.put(("log", f"{found.name} wasn't moved back: {error}"))
             self._scan_work()
 
@@ -350,7 +431,7 @@ class App(ttk.Frame):
             return
         if ask and not messagebox.askyesno(
             "Delete old copies",
-            f"Check that your tools still work first. This deletes {len(records)} old copies. Undo will still work.",
+            f"Check that everything still works first. This deletes {len(records)} old copies. Undo will still work.",
         ):
             return
         remove_links = self.remove_links.get()
@@ -361,8 +442,30 @@ class App(ttk.Frame):
                     done = actions.finish_record(record, self.journal, remove_links)
                     note = "the link stays" if done["pointer"] else "nothing is left behind"
                     self.events.put(("log", f"Deleted the old copy of {record['name']}, and {note}."))
-                except ERRORS as error:
+                except actions.ERRORS as error:
                     self.events.put(("log", f"{record['name']}: {error}"))
+            self._scan_work()
+
+        self._run(work)
+
+    def start_clear(self, ask=True):
+        chosen = self._chosen(CAN_CLEAR)
+        if not chosen:
+            self.write("Choose Caches under Show, then tick what to clear.")
+            return
+        size = volumes.format_size(sum(found.size for found in chosen))
+        if ask and not messagebox.askyesno(
+            "Clear caches",
+            f"Delete {size} from {len(chosen)} caches?\n\nThis can't be undone, but your tools download or rebuild them when needed.",
+        ):
+            return
+
+        def work():
+            for found in chosen:
+                try:
+                    self.events.put(("log", actions.clear_cache(found)))
+                except actions.ERRORS as error:
+                    self.events.put(("log", f"{found.name}: {error}"))
             self._scan_work()
 
         self._run(work)
