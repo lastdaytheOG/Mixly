@@ -99,3 +99,99 @@ DARK = Palette(
     attention=oklch(0.80, 0.12, 80),
     problem=oklch(0.76, 0.13, 28),
 )
+
+
+def windows_prefers_dark():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return False
+
+
+def current():
+    return DARK if windows_prefers_dark() else LIGHT
+
+
+def dark_title_bar(window, enabled):
+    try:
+        handle = ctypes.windll.user32.GetParent(window.winfo_id())
+        value = ctypes.c_int(1 if enabled else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
+    except (OSError, AttributeError):
+        pass
+
+
+def scale_of(window):
+    return window.winfo_fpixels("1i") / 96
+
+
+def apply(window, palette):
+    scale = scale_of(window)
+    size = lambda value: round(value * scale)
+    default = tkfont.nametofont("TkDefaultFont")
+    default.configure(family=FONT, size=10)
+    tkfont.nametofont("TkTextFont").configure(family=FONT, size=10)
+    tkfont.nametofont("TkHeadingFont").configure(family=FONT, size=9)
+    window.configure(background=palette.surface)
+    style = ttk.Style(window)
+    style.theme_use("clam")
+    style.configure(".", background=palette.surface, foreground=palette.ink, font=(FONT, 10), borderwidth=0, focuscolor=palette.accent)
+    style.configure("TFrame", background=palette.surface)
+    style.configure("Side.TFrame", background=palette.side)
+    style.configure("TLabel", background=palette.surface, foreground=palette.ink)
+    style.configure("Muted.TLabel", background=palette.surface, foreground=palette.muted)
+    style.configure("Title.TLabel", background=palette.surface, foreground=palette.ink, font=(SEMIBOLD, 16))
+    style.configure("Empty.TLabel", background=palette.surface, foreground=palette.muted, font=(FONT, 10), justify="center")
+
+    def button(name, background, foreground, hover, border, pressed=None):
+        style.configure(name, background=background, foreground=foreground, bordercolor=border, lightcolor=background, darkcolor=background, borderwidth=1, relief="flat", padding=(size(12), size(6)), font=(FONT, 10), focuscolor=foreground, anchor="center")
+        style.map(
+            name,
+            background=[("disabled", palette.raised), ("pressed", pressed or hover), ("active", hover)],
+            foreground=[("disabled", palette.muted)],
+            lightcolor=[("disabled", palette.raised), ("active", hover)],
+            darkcolor=[("disabled", palette.raised), ("active", hover)],
+            bordercolor=[("focus", palette.accent), ("disabled", palette.line)],
+        )
+
+    button("Primary.TButton", palette.accent, palette.on_accent, palette.accent_hover, palette.accent)
+    button("TButton", palette.raised, palette.ink, palette.hover, palette.line)
+    button("Ghost.TButton", palette.surface, palette.ink, palette.hover, palette.surface)
+    style.configure("Primary.TButton", font=(SEMIBOLD, 10))
+    style.configure("Ghost.TButton", padding=(size(8), size(4)), foreground=palette.muted)
+    for name in ("Primary.TButton", "TButton", "Ghost.TButton"):
+        style.configure(name, width=-1)
+
+    style.configure("Treeview", background=palette.surface, fieldbackground=palette.surface, foreground=palette.ink, rowheight=size(30), borderwidth=0, font=(FONT, 10))
+    style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+    style.map("Treeview", background=[("selected", palette.selected)], foreground=[("selected", palette.ink)])
+    style.configure("Treeview.Heading", background=palette.surface, foreground=palette.muted, relief="flat", borderwidth=0, padding=(size(6), size(6)), font=(FONT, 9), lightcolor=palette.surface, darkcolor=palette.surface, bordercolor=palette.line)
+    style.map("Treeview.Heading", background=[("active", palette.hover)], foreground=[("active", palette.ink)])
+
+    style.configure("TEntry", fieldbackground=palette.raised, foreground=palette.ink, bordercolor=palette.line, lightcolor=palette.raised, darkcolor=palette.raised, insertcolor=palette.ink, padding=size(5), borderwidth=1)
+    style.map("TEntry", bordercolor=[("focus", palette.accent)], lightcolor=[("focus", palette.raised)], darkcolor=[("focus", palette.raised)])
+    style.configure("TCombobox", fieldbackground=palette.raised, background=palette.raised, foreground=palette.ink, arrowcolor=palette.muted, bordercolor=palette.line, lightcolor=palette.raised, darkcolor=palette.raised, padding=size(5), borderwidth=1)
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", palette.raised)],
+        foreground=[("readonly", palette.ink)],
+        selectbackground=[("readonly", palette.raised)],
+        selectforeground=[("readonly", palette.ink)],
+        background=[("active", palette.hover)],
+        bordercolor=[("focus", palette.accent)],
+    )
+    window.option_add("*TCombobox*Listbox.background", palette.raised)
+    window.option_add("*TCombobox*Listbox.foreground", palette.ink)
+    window.option_add("*TCombobox*Listbox.selectBackground", palette.selected)
+    window.option_add("*TCombobox*Listbox.selectForeground", palette.ink)
+    window.option_add("*TCombobox*Listbox.font", (FONT, 10))
+    window.option_add("*TCombobox*Listbox.borderWidth", 0)
+
+    style.configure("TCheckbutton", background=palette.surface, foreground=palette.ink, indicatorbackground=palette.raised, indicatorforeground=palette.accent, bordercolor=palette.line, lightcolor=palette.raised, darkcolor=palette.raised, focuscolor=palette.accent, padding=size(2))
+    style.map("TCheckbutton", background=[("active", palette.surface)], indicatorbackground=[("selected", palette.raised), ("active", palette.hover)])
+    style.layout("Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+    style.configure("Vertical.TScrollbar", background=palette.track, troughcolor=palette.surface, bordercolor=palette.surface, lightcolor=palette.track, darkcolor=palette.track, arrowcolor=palette.muted, gripcount=0, width=size(10), arrowsize=size(10))
+    style.map("Vertical.TScrollbar", background=[("active", palette.muted)])
+    style.configure("Horizontal.TProgressbar", background=palette.accent, troughcolor=palette.track, bordercolor=palette.track, lightcolor=palette.accent, darkcolor=palette.accent, thickness=size(4))
+    return scale
