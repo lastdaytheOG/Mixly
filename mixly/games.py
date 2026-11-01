@@ -46,3 +46,30 @@ def _registry_children(hive, key):
                 index += 1
     except OSError:
         return []
+
+
+def steam_libraries(steam_root):
+    libraries = [os.path.normpath(steam_root)]
+    for key, value in parse_pairs(_read(os.path.join(steam_root, "steamapps", "libraryfolders.vdf"))):
+        if key.lower() == "path":
+            path = os.path.normpath(value)
+            if path.lower() not in (library.lower() for library in libraries):
+                libraries.append(path)
+    return libraries
+
+
+def steam_games(steam_root=None):
+    root = steam_root or _registry_value(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath")
+    if not root:
+        return []
+    games = []
+    for library in steam_libraries(root):
+        for manifest in glob.glob(os.path.join(glob.escape(library), "steamapps", "appmanifest_*.acf")):
+            values = {key.lower(): value for key, value in parse_pairs(_read(manifest))}
+            if not values.get("installdir"):
+                continue
+            path = os.path.join(library, "steamapps", "common", values["installdir"])
+            if os.path.isdir(path):
+                name = values.get("name", values["installdir"])
+                games.append(Tool(f"steam:{values.get('appid', values['installdir'])}", name, path, (), STEAM))
+    return games
