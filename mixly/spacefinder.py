@@ -49,3 +49,45 @@ def read_tree(path, minimum, on_folder=None, cancel=None):
             if info.st_size >= minimum:
                 node.files.append((strip_extended(entry.path), info.st_size))
     return node
+
+
+def container_keys():
+    home = os.environ.get("USERPROFILE", "")
+    local = os.environ.get("LOCALAPPDATA", "")
+    names = ("Documents", "Downloads", "Desktop", "Pictures", "Music", "Videos", ".cache", ".local", ".gemini")
+    keys = {key(os.path.join(home, name)) for name in names}
+    keys.add(key(os.path.join(local, "Programs")))
+    return keys
+
+
+def stays_reason(path):
+    reason = protected_reason(path)
+    if reason:
+        return reason
+    temporary = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Temp")
+    if key(path) == key(temporary):
+        return "Windows and apps keep temporary files here"
+    return None
+
+
+def _has_movable(node):
+    return stays_reason(node.path) is None or any(_has_movable(child) for child in node.children)
+
+
+def pick(node, minimum, results=None, containers=None):
+    chosen = [] if results is None else results
+    groups = container_keys() if containers is None else containers
+    reason = stays_reason(node.path)
+    if reason:
+        if any(_has_movable(child) for child in node.children):
+            for child in node.children:
+                pick(child, minimum, chosen, groups)
+        elif node.size >= minimum:
+            chosen.append((node.path, node.size, reason))
+        return chosen
+    if key(node.path) in groups and node.children:
+        for child in node.children:
+            pick(child, minimum, chosen, groups)
+        return chosen
+    chosen.append((node.path, node.size, ""))
+    return chosen
