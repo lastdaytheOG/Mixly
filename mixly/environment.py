@@ -54,3 +54,16 @@ class RegistryEnv:
         ctypes.windll.user32.SendMessageTimeoutW(
             HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", SMTO_ABORTIFHUNG, 2000, ctypes.byref(result)
         )
+
+
+def rewrite_path(value, old_root, new_root):
+    entries = []
+    changed = False
+    for entry in value.split(";"):
+        expanded = os.path.expandvars(entry.strip())
+        if expanded and os.path.isabs(expanded) and is_within(expanded, old_root):
+            entries.append(rebase(expanded, old_root, new_root))
+            changed = True
+        else:
+            entries.append(entry)
+    return ";".join(entries), changed
