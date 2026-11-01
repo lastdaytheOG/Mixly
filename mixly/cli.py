@@ -7,7 +7,7 @@ from .catalog import by_id
 from .copier import Cancelled
 from .environment import RegistryEnv
 from .journal import Journal
-from .scan import APPS, CACHES, CAN_CLEAR, DATA, DEVELOPER, GAMES, LARGE, PERSONAL, STORE, Found, scan
+from .scan import APPS, CACHES, CAN_CLEAR, DATA, DEVELOPER, FILES, GAMES, PERSONAL, STORE, Found, scan
 from .volumes import format_size, list_drives
 
 CATEGORIES = {
@@ -42,7 +42,7 @@ def _command_scan(arguments, journal, store):
 
 
 def _command_space(arguments, journal, store):
-    root = f"{os.environ.get('SystemDrive', 'C:')}\\"
+    root = f"{arguments.drive.rstrip(':')}:\\" if arguments.drive and len(arguments.drive) <= 2 else arguments.drive or f"{os.environ.get('SystemDrive', 'C:')}\\"
     minimum = int(arguments.min_gb * spacefinder.GIGABYTE)
     print(f"Reading {root}, which can take a few minutes...")
     _print_found(spacefinder.find(root, journal, minimum))
@@ -59,8 +59,13 @@ def _selection(arguments, journal):
     available = {item.id: item for item in scan(journal)} if arguments.all or arguments.ids else {}
     chosen = []
     if arguments.all:
-        ready = [item for item in available.values() if item.status in ("ready", "paused") and _in_category(item, arguments.category)]
-        free = volumes.free_bytes(volumes.drive_of(arguments.to))
+        destination = volumes.drive_of(arguments.to)
+        ready = [
+            item
+            for item in available.values()
+            if item.status in ("ready", "paused") and _in_category(item, arguments.category) and volumes.drive_of(item.source) != destination
+        ]
+        free = volumes.free_bytes(destination)
         chosen, left = planner.fit(ready, free)
         for item in left:
             print(f"{item.name} ({format_size(item.size)}) doesn't fit on {arguments.to}, so it stays")
@@ -163,6 +168,37 @@ def _command_clean(arguments, journal, store):
     return 1 if failures else 0
 
 
+def _command_move_file(arguments, journal, store):
+    failures = 0
+    for path in arguments.paths:
+        found = Found(path, os.path.basename(path), path, 0, "ready", is_item=True, category=FILES)
+        try:
+            record = actions.move_found(found, arguments.to, journal, store, _Progress())
+            print(f"\r{record['name']} moved to {record['target']} ({record['id']})")
+        except (*actions.ERRORS, Cancelled) as error:
+            failures += 1
+            print(f"\r{path}: {error}")
+    return 1 if failures else 0
+
+
+def _command_delete(arguments, journal, store):
+    where = "permanently delete" if arguments.permanently else "send to the Recycle Bin"
+    if not arguments.yes:
+        print(f"This will {where}:")
+        print("\n".join(f"  {path}" for path in arguments.paths))
+        if input("Continue? [y/N] ").strip().lower() != "y":
+            return 1
+    failures = 0
+    for path in arguments.paths:
+        found = Found(path, os.path.basename(path), path, 0, "ready", is_item=True, category=FILES)
+        try:
+            print(actions.delete_found(found, journal, arguments.permanently))
+        except actions.ERRORS as error:
+            failures += 1
+            print(f"{path}: {error}")
+    return 1 if failures else 0
+
+
 def _command_recover(arguments, journal, store):
     messages = actions.recover(journal, store)
     print("\n".join(messages) if messages else "Nothing needs recovering")
@@ -178,7 +214,17 @@ def build_parser():
     scan_command.set_defaults(run=_command_scan)
     space = commands.add_parser("space", help="show what's filling the system drive")
     space.add_argument("--min-gb", type=float, default=1.0)
+    space.add_argument("--drive")
     space.set_defaults(run=_command_space)
+    move_file = commands.add_parser("move-file", help="move files or folders, leaving nothing behind")
+    move_file.add_argument("paths", nargs="+")
+    move_file.add_argument("--to", required=True)
+    move_file.set_defaults(run=_command_move_file)
+    delete = commands.add_parser("delete", help="send files or folders to the Recycle Bin")
+    delete.add_argument("paths", nargs="+")
+    delete.add_argument("--permanently", action="store_true")
+    delete.add_argument("--yes", action="store_true")
+    delete.set_defaults(run=_command_delete)
     commands.add_parser("drives", help="list internal drives").set_defaults(run=_command_drives)
     move = commands.add_parser("move", help="move tools, games, apps or folders to another drive")
     move.add_argument("ids", nargs="*")
