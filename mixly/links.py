@@ -59,3 +59,14 @@ def _remove(path, info):
     else:
         os.chmod(path, stat.S_IWRITE)
         os.unlink(path)
+
+
+def prune_empty(path, stop):
+    current = os.path.dirname(os.path.abspath(path))
+    limit = os.path.normcase(os.path.abspath(stop))
+    while os.path.normcase(current).startswith(limit) and os.path.normcase(current) != limit:
+        try:
+            os.rmdir(long_path(current))
+        except OSError:
+            return
+        current = os.path.dirname(current)
