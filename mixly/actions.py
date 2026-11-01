@@ -1,10 +1,14 @@
-from . import caches, known, launchers, mover, store_apps, volumes, wsl
+import os
+import subprocess
+
+from . import caches, content, known, launchers, mover, store_apps, trash, volumes, wsl
 from .copier import CopyError
 from .journal import Busy
 from .links import is_junction
 from .services import ServiceError
 
 ERRORS = (mover.MoveError, wsl.WslError, CopyError, ServiceError, OSError, Busy, KeyError)
+SETTINGS_APPS = "ms-settings:appsfeatures"
 NO_LIBRARY_NOTE = (
     "{name} moved with a link because Steam has no library on {drive}. "
     "Add one in Steam under Settings > Storage for a move that also avoids Steam's free space check."
@@ -29,6 +33,8 @@ def _move_game(found, root, journal, store, progress, cancel):
 def move_found(found, root, journal, store, progress=None, cancel=None):
     if found.distro:
         record = wsl.move(found.distro, root, journal)
+    elif found.is_item:
+        record = content.move_item(found.source, root, journal, progress, cancel)
     elif found.known:
         record = known.move(found.known, root, journal, None, progress, cancel)
     elif found.package:
@@ -53,12 +59,24 @@ def undo_record(record, journal, store, progress=None, cancel=None):
         return launchers.undo(record["id"], journal, progress, cancel)
     if kind == "store":
         return store_apps.undo(record["id"], journal)
+    if kind == "content":
+        return content.undo(record["id"], journal, progress, cancel)
     return mover.undo(record["id"], journal, store, progress, cancel)
+
+
+def relocate(found, record, root, journal, store, progress=None, cancel=None):
+    original = volumes.drive_of(record["source"])
+    message = undo_record(record, journal, store, progress, cancel)
+    if volumes.drive_of(root) == original:
+        return message
+    found.status = "ready"
+    moved = move_found(found, root, journal, store, progress, cancel)
+    return f"{found.name} moved to {moved['target']}."
 
 
 def finish_record(record, journal, remove_pointer=False):
     kind = record["kind"]
-    if kind in ("wsl", "store"):
+    if kind in ("wsl", "store", "content"):
         record["state"] = "finished"
         journal.put(record)
         return record
@@ -70,7 +88,7 @@ def finish_record(record, journal, remove_pointer=False):
 
 
 def recover(journal, store):
-    return mover.recover(journal, store) + known.recover(journal) + launchers.recover(journal)
+    return mover.recover(journal, store) + known.recover(journal) + launchers.recover(journal) + content.recover(journal)
 
 
 def clear_cache(found):
@@ -79,3 +97,34 @@ def clear_cache(found):
     if skipped:
         message += f" {skipped} items were in use and stayed."
     return message
+
+
+def delete_found(found, journal, permanently=False):
+    problem = content.problem_with(found.source, journal)
+    if problem:
+        raise mover.MoveError(problem)
+    if permanently:
+        trash.delete_permanently(found.source)
+        return f"{found.name} was permanently deleted."
+    trash.to_recycle_bin(found.source)
+    return f"{found.name} is in the Recycle Bin. Empty it to get the space back."
+
+
+def uninstall(found):
+    tool = found.tool
+    if found.package:
+        os.startfile(SETTINGS_APPS)
+        return f"Opened Windows Settings. Find {found.name} there to uninstall it."
+    if tool is not None and tool.id.startswith(launchers.STEAM_PREFIX):
+        os.startfile(f"steam://uninstall/{tool.id[len(launchers.STEAM_PREFIX):]}")
+        return f"Asked Steam to uninstall {found.name}."
+    if tool is not None and tool.uninstall:
+        subprocess.Popen(tool.uninstall)
+        return f"Opened the uninstaller for {found.name}."
+    os.startfile(SETTINGS_APPS)
+    return f"{found.name} has no uninstaller of its own, so Windows Settings is open."
+
+
+def reveal(path):
+    if os.path.exists(path):
+        subprocess.Popen(["explorer", f"/select,{os.path.abspath(path)}"])
