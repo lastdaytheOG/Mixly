@@ -166,3 +166,54 @@ def copy_tree(source, target, on_bytes=None, cancel=None):
         path = os.path.join(target_base, relative) if relative else target_base
         _restore_stat(path, info)
     return manifest
+
+
+def _hash_file(path, on_bytes, cancel):
+    digest = hashlib.blake2b(digest_size=16)
+    with open(path, "rb") as reader:
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            chunk = reader.read(CHUNK)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+            if on_bytes is not None:
+                on_bytes(len(chunk))
+
+
+def _check_source_unchanged(manifest, source):
+    seen = set()
+    for relative, kind, info in walk(source):
+        seen.add(relative)
+        item = manifest.get(relative)
+        if item is None or item.kind != kind:
+            raise CopyError(f"{relative} changed while it was being copied")
+        if kind == "file" and (item.size != info.st_size or item.mtime != info.st_mtime_ns):
+            raise CopyError(f"{relative} changed while it was being copied")
+    missing = set(manifest) - seen
+    if missing:
+        raise CopyError(f"{sorted(missing)[0]} disappeared while it was being copied")
+
+
+def _check_target(manifest, target, on_bytes, cancel):
+    base = long_path(target)
+    seen = set()
+    for relative, kind, info in walk(target):
+        seen.add(relative)
+        item = manifest.get(relative)
+        if item is None or item.kind != kind:
+            raise CopyError(f"{relative} doesn't match the original")
+        if kind == "file":
+            if item.size != info.st_size:
+                raise CopyError(f"{relative} has the wrong size")
+            if _hash_file(os.path.join(base, relative), on_bytes, cancel) != item.digest:
+                raise CopyError(f"{relative} failed its checksum")
+    missing = set(manifest) - seen
+    if missing:
+        raise CopyError(f"{sorted(missing)[0]} is missing from the copy")
+
+
+def verify_tree(manifest, source, target, on_bytes=None, cancel=None):
+    _check_source_unchanged(manifest, source)
+    _check_target(manifest, target, on_bytes, cancel)
