@@ -71,3 +71,31 @@ def measure(root):
         elif kind == "other":
             unsupported.append(relative)
     return size, files, unsupported
+
+
+def _apply_attributes(path, info):
+    attributes = info.st_file_attributes & KEPT_ATTRIBUTES
+    if attributes:
+        ctypes.windll.kernel32.SetFileAttributesW(path, attributes)
+
+
+def _restore_stat(path, info):
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+    _apply_attributes(path, info)
+
+
+def _copy_file(source, target, info, on_bytes, cancel):
+    digest = hashlib.blake2b(digest_size=16)
+    with open(source, "rb") as reader, open(target, "xb") as writer:
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            chunk = reader.read(CHUNK)
+            if not chunk:
+                break
+            writer.write(chunk)
+            digest.update(chunk)
+            if on_bytes is not None:
+                on_bytes(len(chunk))
+    _restore_stat(target, info)
+    return digest.hexdigest()
