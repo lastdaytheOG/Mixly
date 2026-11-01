@@ -5,26 +5,28 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import actions, mover, volumes, wsl
+from . import actions, elevation, mover, volumes, wsl
 from .catalog import CATALOG
 from .copier import Cancelled, CopyError
 from .environment import RegistryEnv
 from .journal import Busy, Journal
-from .scan import Found, scan
+from .scan import APPS, DEVELOPER, GAMES, STAYS, Found, scan
 
 ERRORS = (mover.MoveError, wsl.WslError, CopyError, OSError, Busy, KeyError)
 CHECKED = "☑"
 UNCHECKED = "☐"
+EVERYTHING = "Everything"
 
 
 class App(ttk.Frame):
-    def __init__(self, master, journal=None, store=None, tools=CATALOG, include_wsl=True):
+    def __init__(self, master, journal=None, store=None, tools=CATALOG, include_wsl=True, include_installed=True):
         super().__init__(master, padding=14)
         self.master = master
         self.journal = journal or Journal()
         self.store = store or RegistryEnv()
         self.tools = tools
         self.include_wsl = include_wsl
+        self.include_installed = include_installed
         self.events = queue.Queue()
         self.cancel = threading.Event()
         self.working = False
@@ -46,13 +48,18 @@ class App(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
-        ttk.Label(self, text="Move your developer tools to another drive", font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(self, text="Move your tools, games and apps to another drive", font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
 
         bar = ttk.Frame(self)
         bar.grid(row=1, column=0, sticky="ew", pady=(10, 8))
         ttk.Label(bar, text="Move to").pack(side="left")
         self.drive = ttk.Combobox(bar, state="readonly", width=30)
         self.drive.pack(side="left", padx=(6, 12))
+        ttk.Label(bar, text="Show").pack(side="left")
+        self.show = ttk.Combobox(bar, state="readonly", width=15, values=(DEVELOPER, GAMES, APPS, EVERYTHING))
+        self.show.current(0)
+        self.show.pack(side="left", padx=(6, 12))
+        self.show.bind("<<ComboboxSelected>>", lambda event: self._refresh_rows())
         self.scan_button = ttk.Button(bar, text="Scan again", command=self.start_scan)
         self.scan_button.pack(side="left")
         self.add_button = ttk.Button(bar, text="Add folder", command=self.add_folder)
@@ -83,7 +90,7 @@ class App(ttk.Frame):
 
         actions_bar = ttk.Frame(self)
         actions_bar.grid(row=3, column=0, sticky="ew", pady=10)
-        self.move_all_button = ttk.Button(actions_bar, text="Move everything", command=self.start_move_everything)
+        self.move_all_button = ttk.Button(actions_bar, text="Move everything shown", command=self.start_move_everything)
         self.move_all_button.pack(side="left")
         self.move_button = ttk.Button(actions_bar, text="Move selected", command=self.start_move)
         self.move_button.pack(side="left", padx=6)
@@ -135,24 +142,45 @@ class App(ttk.Frame):
         self.toggle(row)
 
     def toggle(self, row):
-        if self.rows[row].status not in ("ready", "moved", "finished"):
+        found = self.rows[row]
+        if found.status == STAYS:
+            self.write(f"{found.name} stays put: {found.reason}.")
+            return
+        if found.status not in ("ready", "moved", "finished"):
             return
         if row in self.checked:
             self.checked.remove(row)
         else:
             self.checked.add(row)
-        self.tree.set(row, "pick", CHECKED if row in self.checked else UNCHECKED)
+        if self.tree.exists(row):
+            self.tree.set(row, "pick", CHECKED if row in self.checked else UNCHECKED)
+
+    def _visible(self, found):
+        return self.show.get() == EVERYTHING or found.category == self.show.get()
+
+    def _values(self, found):
+        pick = CHECKED if found.id in self.checked else UNCHECKED
+        return (pick, found.name, volumes.format_size(found.size) if found.size else "", found.status, found.source)
+
+    def _update_total(self):
+        ready = sum(item.size for item in self.rows.values() if item.status == "ready" and self._visible(item))
+        self.total.configure(text=f"{volumes.format_size(ready)} can be moved")
+
+    def _refresh_rows(self):
+        self.tree.delete(*self.tree.get_children())
+        for found in self.rows.values():
+            if self._visible(found):
+                self.tree.insert("", "end", iid=found.id, values=self._values(found))
+        self._update_total()
 
     def _show_found(self, found):
-        row = found.id
-        values = (UNCHECKED, found.name, volumes.format_size(found.size) if found.size else "", found.status, found.source)
-        if row in self.rows:
-            self.tree.item(row, values=values)
-        else:
-            self.tree.insert("", "end", iid=row, values=values)
-        self.rows[row] = found
-        ready = sum(item.size for item in self.rows.values() if item.status == "ready")
-        self.total.configure(text=f"{volumes.format_size(ready)} can be moved")
+        self.rows[found.id] = found
+        if self._visible(found):
+            if self.tree.exists(found.id):
+                self.tree.item(found.id, values=self._values(found))
+            else:
+                self.tree.insert("", "end", iid=found.id, values=self._values(found))
+        self._update_total()
 
     def _set_working(self, working):
         self.working = working
@@ -211,6 +239,7 @@ class App(ttk.Frame):
             self.tools,
             self.include_wsl,
             lambda item: self.events.put(("found", item)),
+            self.include_installed,
         )
         for record in self.journal.records():
             if not any(item.source.lower() == record["source"].lower() or item.distro == record.get("distro") for item in found):
@@ -234,11 +263,13 @@ class App(ttk.Frame):
 
     def add_path(self, path):
         clean = os.path.normpath(path)
+        self.show.set(EVERYTHING)
+        self._refresh_rows()
         self._show_found(Found(clean, os.path.basename(clean), clean, 0, "ready"))
         self.toggle(clean)
 
     def _chosen(self, *statuses):
-        return [self.rows[row] for row in self.checked if self.rows[row].status in statuses]
+        return [self.rows[row] for row in self.checked if self.rows[row].status in statuses and self._visible(self.rows[row])]
 
     def _record_for(self, found):
         for record in self.journal.records():
@@ -247,7 +278,7 @@ class App(ttk.Frame):
         return None
 
     def start_move_everything(self, ask=True):
-        ready = [row for row, found in self.rows.items() if found.status == "ready"]
+        ready = [row for row, found in self.rows.items() if found.status == "ready" and self._visible(found)]
         if not ready:
             self.write("There's nothing ready to move.")
             return
@@ -302,8 +333,8 @@ class App(ttk.Frame):
                     continue
                 self.events.put(("log", f"Moving {found.name} back..."))
                 try:
-                    actions.undo_record(record, self.journal, self.store, self._report_progress, self.cancel)
-                    self.events.put(("log", f"{found.name} is back where it started."))
+                    message = actions.undo_record(record, self.journal, self.store, self._report_progress, self.cancel)
+                    self.events.put(("log", message))
                 except Cancelled:
                     self.events.put(("log", f"{found.name}: stopped, so it stays moved."))
                 except ERRORS as error:
@@ -338,6 +369,9 @@ class App(ttk.Frame):
 
 
 def main():
+    admin = elevation.is_admin()
+    if not admin and elevation.relaunch():
+        return 0
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except OSError:
@@ -346,6 +380,8 @@ def main():
     style = ttk.Style(root)
     if "vista" in style.theme_names():
         style.theme_use("vista")
-    App(root)
+    app = App(root)
+    if not admin:
+        app.write("Running without administrator rights, so anything in Program Files can't be moved.")
     root.mainloop()
     return 0
