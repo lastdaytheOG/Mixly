@@ -135,3 +135,45 @@ def finish(record_id, journal, remove_pointer=False):
     record["state"] = "finished"
     journal.put(record)
     return record
+
+
+def undo(record_id, journal, store, progress=None, cancel=None, names=None):
+    record = journal.get(record_id)
+    if record["kind"] != "folder" or record["state"] not in MOVED_STATES:
+        raise MoveError(f"{record['name']} can't be undone from state {record['state']}")
+    tool = _tool_of(record)
+    if tool is not None and tool.processes:
+        active = processes.still_running(tool.processes, names)
+        if active:
+            raise MoveError(f"close {', '.join(active)} first")
+    size = measure(record["target"])[0]
+    if volumes.free_bytes(volumes.drive_of(record["source"])) < size:
+        raise MoveError(f"not enough free space on {volumes.drive_of(record['source'])}")
+    restore = record["source"] + RESTORE_SUFFIX
+    if os.path.lexists(restore):
+        remove_tree(restore)
+    record["previous_state"] = record["state"]
+    record["state"] = "restoring"
+    journal.put(record)
+    try:
+        _copy_and_verify(record["target"], restore, size, progress, cancel)
+    except BaseException as error:
+        remove_tree(restore)
+        record["state"] = record.pop("previous_state")
+        journal.put(record)
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']}: {error}") from error
+        raise
+    _complete_undo(record, journal, store)
+
+
+def _complete_undo(record, journal, store):
+    restore = record["source"] + RESTORE_SUFFIX
+    if is_junction(record["source"]):
+        remove_junction(record["source"])
+    os.rename(long_path(restore), long_path(record["source"]))
+    if record.get("env_applied"):
+        environment.restore_changes(store, record["env"], record["source"], record["target"])
+    remove_tree(record["backup"])
+    _clear_target(record)
+    journal.remove(record["id"])
