@@ -148,3 +148,69 @@ def cache_items(sizes=None):
         cached = _cached(sizes, cache.source)
         found.append(Found(f"cache:{cache.id}", cache.name, cache.source, cached[0] if cached else 0, CAN_CLEAR, category=CACHES, cache=cache, pending=True, minimum=1))
     return found
+
+
+def discover(journal, tools=CATALOG, include_wsl=True, on_found=None, include_installed=True, include_extras=None, sizes=None):
+    extras = include_installed if include_extras is None else include_extras
+    records = journal.records()
+    states = {record["source"].lower(): record["state"] for record in records if record.get("kind") in ("folder", None)}
+    listing = _service_listing()
+    results = []
+    seen = []
+
+    def emit(found):
+        results.append(found)
+        if on_found is not None:
+            on_found(found)
+
+    def add(tool, category, minimum=0, skip_parents=False):
+        if any(is_within(tool.source, known) for known in seen):
+            return
+        if skip_parents and any(is_within(known, tool.source) for known in seen):
+            return
+        found = identify(tool, states, category, listing, minimum, sizes)
+        if found is None:
+            return
+        seen.append(found.source)
+        emit(found)
+
+    for tool in tools:
+        add(tool, DEVELOPER)
+    if extras:
+        for found in known_items(records, sizes):
+            emit(found)
+        for found in cache_items(sizes):
+            emit(found)
+    if include_wsl:
+        paths = wsl.base_paths()
+        for distro in wsl.list_distros():
+            name = distro["name"]
+            if name.lower().startswith(wsl.RESERVED_PREFIX) or name not in paths:
+                continue
+            status = "moved" if any(record.get("distro") == name for record in records) else "ready"
+            emit(Found(f"wsl:{name}", f"WSL: {name}", paths[name], wsl.disk_size(paths[name]), status, distro=name))
+    if include_installed:
+        for tool in games.all_games():
+            add(tool, GAMES)
+        for tool in installed.find_apps(discover=True):
+            guessed = tool.id.startswith(("app:found:", "app:folder:"))
+            add(tool, APPS, GUESSED_APP_MINIMUM if guessed else 0, skip_parents=True)
+    if extras:
+        for tool in appdata.save_folders():
+            add(tool, DATA, skip_parents=True)
+        for tool in appdata.data_folders():
+            add(tool, DATA, appdata.MINIMUM, skip_parents=True)
+        for found in store_items(records):
+            emit(found)
+    return results
+
+
+def scan(journal, tools=CATALOG, include_wsl=True, on_found=None, include_installed=True, include_extras=None, sizes=None):
+    items = discover(journal, tools, include_wsl, None, include_installed, include_extras, sizes)
+    with ThreadPoolExecutor(WORKERS) as pool:
+        list(pool.map(lambda item: settle(item, sizes), items))
+    results = [item for item in items if not item.hidden]
+    if on_found is not None:
+        for item in results:
+            on_found(item)
+    return results
