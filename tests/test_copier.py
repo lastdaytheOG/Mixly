@@ -2,7 +2,9 @@ import ctypes
 import os
 import stat
 import threading
+from unittest import mock
 
+from mixly import copier
 from mixly.copier import Cancelled, CopyError, copy_tree, measure, verify_tree, walk
 from mixly.links import create_junction, is_junction, link_target
 from tests.helpers import TempCase
@@ -106,6 +108,48 @@ class CopierTests(TempCase):
         self.write("src/b.txt")
         with self.assertRaises(CopyError):
             verify_tree(manifest, self.path("src"), self.path("dst"))
+
+    def test_resume_keeps_finished_files_and_redoes_partial_ones(self):
+        self.write("src/done.txt", "finished")
+        self.write("src/partial.txt", "complete content")
+        copy_tree(self.path("src"), self.path("dst"))
+        with open(self.path("dst", "partial.txt"), "w", encoding="utf-8") as handle:
+            handle.write("comp")
+        self.write("src/new.txt", "new")
+        copied = []
+        original = copier._copy_file
+
+        def record(source, target, *rest):
+            copied.append(os.path.basename(target))
+            return original(source, target, *rest)
+
+        with mock.patch("mixly.copier._copy_file", side_effect=record):
+            manifest = copy_tree(self.path("src"), self.path("dst"), resume=True)
+        verify_tree(manifest, self.path("src"), self.path("dst"))
+        self.assertEqual(sorted(copied), ["new.txt", "partial.txt"])
+
+    def test_resume_fails_verify_if_a_kept_file_is_damaged(self):
+        self.write("src/a.txt", "good")
+        copy_tree(self.path("src"), self.path("dst"))
+        info = os.stat(self.path("dst", "a.txt"))
+        with open(self.path("dst", "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("evil")
+        os.utime(self.path("dst", "a.txt"), ns=(info.st_atime_ns, info.st_mtime_ns))
+        manifest = copy_tree(self.path("src"), self.path("dst"), resume=True)
+        with self.assertRaises(CopyError):
+            verify_tree(manifest, self.path("src"), self.path("dst"))
+
+    def test_resume_recreates_links(self):
+        self.write("src/real/a.txt")
+        create_junction(self.path("src", "real"), self.path("src", "link"))
+        copy_tree(self.path("src"), self.path("dst"))
+        manifest = copy_tree(self.path("src"), self.path("dst"), resume=True)
+        verify_tree(manifest, self.path("src"), self.path("dst"))
+        self.assertTrue(is_junction(self.path("dst", "link")))
+
+    def test_measure_lists_driver_files(self):
+        self.write("src/a.sys")
+        self.assertEqual(measure(self.path("src"))[3], ["a.sys"])
 
     def test_cancel_stops_the_copy(self):
         self.write("src/a.txt")
