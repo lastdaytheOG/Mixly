@@ -94,3 +94,24 @@ def _check_contents(check):
     needed = int(check.size * HEADROOM)
     if free < needed:
         check.problems.append(f"needs {volumes.format_size(needed)}, but only {volumes.format_size(free)} is free")
+
+
+def run(source, root, journal, tool=None, same_drive_ok=False, names=None):
+    check = Check(full(source))
+    check.root = normalize_root(root)
+    if not _check_source(check):
+        return check
+    _check_root(check, same_drive_ok)
+    try:
+        check.target = target_for(check.root, check.source)
+    except ValueError as error:
+        check.problems.append(str(error))
+        return check
+    _check_overlap(check, journal)
+    _check_leftovers(check)
+    if tool is not None and tool.processes:
+        active = processes.still_running(tool.processes, names)
+        if active:
+            check.problems.append(f"close {', '.join(active)} first")
+    _check_contents(check)
+    return check
