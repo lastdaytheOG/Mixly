@@ -131,3 +131,38 @@ def _copy_link(source_path, target_path, source_root, target_root, kind, info):
         except OSError as error:
             raise CopyError(f"couldn't recreate the link {source_path}: {error}") from error
     return resolved
+
+
+def copy_tree(source, target, on_bytes=None, cancel=None):
+    manifest = {}
+    source_base, target_base = long_path(source), long_path(target)
+    folders = [("", os.lstat(source_base))]
+    links = []
+    os.makedirs(target_base)
+    for relative, kind, info in walk(source):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        source_path = os.path.join(source_base, relative)
+        target_path = os.path.join(target_base, relative)
+        if kind == "dir":
+            os.makedirs(target_path, exist_ok=True)
+            folders.append((relative, info))
+            manifest[relative] = Item("dir")
+        elif kind == "file":
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            digest = _copy_file(source_path, target_path, info, on_bytes, cancel)
+            manifest[relative] = Item("file", info.st_size, digest, info.st_mtime_ns)
+        elif kind in ("junction", "symlink"):
+            links.append((relative, kind, info))
+        else:
+            raise CopyError(f"{source_path} can't be copied")
+    for relative, kind, info in links:
+        source_path = os.path.join(source_base, relative)
+        target_path = os.path.join(target_base, relative)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        link = _copy_link(source_path, target_path, source, target, kind, info)
+        manifest[relative] = Item(kind, link=link)
+    for relative, info in sorted(folders, key=lambda folder: -len(folder[0])):
+        path = os.path.join(target_base, relative) if relative else target_base
+        _restore_stat(path, info)
+    return manifest
