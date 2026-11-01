@@ -72,3 +72,24 @@ class PlanTests(unittest.TestCase):
         restore_changes(store, plan, SOURCE, TARGET)
         self.assertTrue(store.get("Path")[0].endswith(r";C:\new"))
         self.assertIn(SOURCE.lower(), store.get("Path")[0].lower())
+
+
+class RegistryTests(unittest.TestCase):
+    subkey = r"Software\MixlyTests"
+
+    def setUp(self):
+        self.store = RegistryEnv(self.subkey, broadcast=False)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, self.subkey)
+        except FileNotFoundError:
+            pass
+
+    def test_round_trip_keeps_the_value_type(self):
+        self.store.set("A", r"%TEMP%\x", winreg.REG_EXPAND_SZ)
+        self.assertEqual(self.store.get("A"), (r"%TEMP%\x", winreg.REG_EXPAND_SZ))
+        self.assertIn("A", self.store.items())
+        self.store.delete("A")
+        self.assertIsNone(self.store.get("A"))
