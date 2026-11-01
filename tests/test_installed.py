@@ -1,7 +1,10 @@
+import json
 import os
 import winreg
+from types import SimpleNamespace
+from unittest import mock
 
-from mixly.installed import app_root, find_apps, icon_folder, location_of
+from mixly.installed import app_root, find_apps, icon_folder, location_of, program_files_folders, shortcuts
 from tests.helpers import TempCase
 
 ROOT = r"Software\MixlyTests\Uninstall"
@@ -48,6 +51,41 @@ class InstalledTests(TempCase):
     def test_app_root_never_climbs_to_a_protected_folder(self):
         self.assertEqual(app_root(r"C:\bin"), r"C:\bin")
         self.assertEqual(app_root(os.path.join(os.environ["ProgramFiles"], "bin")), os.path.join(os.environ["ProgramFiles"], "bin"))
+
+    def test_discovery_adds_apps_from_shortcuts_and_program_folders(self):
+        os.makedirs(self.path("Listed"))
+        self.write("Resolve/Resolve.exe")
+        self.write("Tools/bin/tool.exe")
+        os.makedirs(self.path("nodejs"))
+        self.add("one", DisplayName="Listed App", InstallLocation=self.path("Listed"))
+        shortcut_list = [
+            {"name": "DaVinci Resolve", "target": self.path("Resolve", "Resolve.exe")},
+            {"name": "Tool", "target": self.path("Tools", "bin", "tool.exe")},
+            {"name": "Uninstall", "target": self.path("Listed", "uninstall.exe")},
+            {"name": "Docs", "target": self.path("Resolve", "guide.pdf")},
+            {"name": "Duplicate", "target": self.path("Listed", "app.exe")},
+        ]
+        with mock.patch("mixly.installed.shortcuts", return_value=shortcut_list):
+            with mock.patch("mixly.installed.app_paths", return_value=[]):
+                with mock.patch("mixly.installed.program_files_folders", return_value=[("nodejs", self.path("nodejs")), ("Listed", self.path("Listed"))]):
+                    apps = find_apps(((winreg.HKEY_CURRENT_USER, ROOT),), discover=True)
+        self.assertEqual(sorted(app.name for app in apps), ["DaVinci Resolve", "Listed App", "Tool", "nodejs"])
+        tool = next(app for app in apps if app.name == "Tool")
+        self.assertEqual(tool.source, self.path("Tools"))
+        self.assertTrue(all(app.id.startswith("app:") for app in apps))
+
+    def test_shortcuts_parses_powershell_output(self):
+        output = json.dumps({"name": "One", "target": "C:\\One\\one.exe"})
+        result = SimpleNamespace(returncode=0, stdout=output)
+        self.assertEqual(shortcuts(lambda script: result), [{"name": "One", "target": "C:\\One\\one.exe"}])
+        self.assertEqual(shortcuts(lambda script: SimpleNamespace(returncode=1, stdout="")), [])
+        self.assertEqual(shortcuts(lambda script: SimpleNamespace(returncode=0, stdout="not json")), [])
+
+    def test_program_files_folders_skips_protected_ones(self):
+        os.makedirs(self.path("pf", "SomeApp"))
+        self.write("pf/file.txt")
+        found = program_files_folders([self.path("pf")])
+        self.assertEqual(found, [("SomeApp", self.path("pf", "SomeApp"))])
 
     def test_finds_an_app(self):
         os.makedirs(self.path("App"))
