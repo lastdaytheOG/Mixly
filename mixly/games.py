@@ -73,3 +73,19 @@ def steam_games(steam_root=None):
                 name = values.get("name", values["installdir"])
                 games.append(Tool(f"steam:{values.get('appid', values['installdir'])}", name, path, (), STEAM))
     return games
+
+
+def epic_games(manifests=None):
+    folder = manifests or os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Epic", "EpicGamesLauncher", "Data", "Manifests")
+    games = []
+    for manifest in glob.glob(os.path.join(glob.escape(folder), "*.item")):
+        try:
+            values = json.loads(_read(manifest))
+        except ValueError:
+            continue
+        path = values.get("InstallLocation")
+        if not path or values.get("bIsIncompleteInstall") or not os.path.isdir(path):
+            continue
+        name = values.get("DisplayName") or os.path.basename(path)
+        games.append(Tool(f"epic:{values.get('AppName', name)}", name, os.path.normpath(path), (), EPIC))
+    return games
