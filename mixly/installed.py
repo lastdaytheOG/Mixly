@@ -50,3 +50,40 @@ def location_of(values):
     if not location:
         location = icon_folder(values.get("DisplayIcon") or "")
     return app_root(location) if location else ""
+
+
+def _entries(sources):
+    for hive, path in sources:
+        try:
+            root = winreg.OpenKey(hive, path)
+        except OSError:
+            continue
+        with root:
+            index = 0
+            while True:
+                try:
+                    name = winreg.EnumKey(root, index)
+                except OSError:
+                    break
+                index += 1
+                try:
+                    with winreg.OpenKey(root, name) as entry:
+                        yield name, _values(entry)
+                except OSError:
+                    continue
+
+
+def find_apps(sources=SOURCES):
+    candidates = {}
+    for name, values in _entries(sources):
+        if values.get("SystemComponent") == 1 or values.get("ParentKeyName") or not values.get("DisplayName"):
+            continue
+        location = location_of(values)
+        if not location or not os.path.isdir(location) or protected_reason(location):
+            continue
+        candidates.setdefault(location.lower(), Tool(f"app:{name}", str(values["DisplayName"]), location))
+    apps = []
+    for tool in sorted(candidates.values(), key=lambda item: len(item.path)):
+        if not any(is_within(tool.path, app.path) for app in apps):
+            apps.append(tool)
+    return sorted(apps, key=lambda item: item.name.lower())
