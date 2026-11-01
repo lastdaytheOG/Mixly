@@ -76,3 +76,45 @@ class CopierTests(TempCase):
         self.write("src/a.txt", "abc")
         create_junction(self.path("outside"), self.path("src", "link"))
         self.assertEqual(measure(self.path("src"))[:2], (3, 1))
+
+    def test_verify_catches_a_damaged_copy(self):
+        self.write("src/a.txt", "good")
+        manifest = copy_tree(self.path("src"), self.path("dst"))
+        with open(self.path("dst", "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("evil")
+        with self.assertRaises(CopyError):
+            verify_tree(manifest, self.path("src"), self.path("dst"))
+
+    def test_verify_catches_a_missing_file(self):
+        self.write("src/a.txt")
+        manifest = copy_tree(self.path("src"), self.path("dst"))
+        os.remove(self.path("dst", "a.txt"))
+        with self.assertRaises(CopyError):
+            verify_tree(manifest, self.path("src"), self.path("dst"))
+
+    def test_verify_catches_a_source_edit(self):
+        path = self.write("src/a.txt", "one")
+        manifest = copy_tree(self.path("src"), self.path("dst"))
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("more")
+        with self.assertRaises(CopyError):
+            verify_tree(manifest, self.path("src"), self.path("dst"))
+
+    def test_verify_catches_a_new_source_file(self):
+        self.write("src/a.txt")
+        manifest = copy_tree(self.path("src"), self.path("dst"))
+        self.write("src/b.txt")
+        with self.assertRaises(CopyError):
+            verify_tree(manifest, self.path("src"), self.path("dst"))
+
+    def test_cancel_stops_the_copy(self):
+        self.write("src/a.txt")
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaises(Cancelled):
+            copy_tree(self.path("src"), self.path("dst"), cancel=cancel)
+
+    def test_walk_lists_children_once(self):
+        self.write("src/a/b.txt")
+        names = sorted(relative for relative, _, _ in walk(self.path("src")))
+        self.assertEqual(names, ["a", os.path.join("a", "b.txt")])
