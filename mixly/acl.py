@@ -57,3 +57,15 @@ def read_dacl(path):
         return text.value
     finally:
         _kernel.LocalFree(text)
+
+
+def _strip_inherited(match):
+    pairs = [match.group(2)[index:index + 2] for index in range(0, len(match.group(2)), 2)]
+    return f"({match.group(1)};{''.join(pair for pair in pairs if pair != 'ID')};"
+
+
+def standalone(sddl):
+    start = sddl.find("(")
+    if start < 0:
+        return None
+    return "D:PAI" + ACE.sub(_strip_inherited, sddl[start:])
