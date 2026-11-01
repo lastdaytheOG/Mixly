@@ -17,6 +17,7 @@ class Tool:
     env: tuple = ()
     processes: tuple = ()
     native: bool = False
+    uninstall: str = ""
 
     @property
     def source(self):
