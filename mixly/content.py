@@ -183,3 +183,20 @@ def undo(record_id, journal, progress=None, cancel=None):
     except OSError as error:
         raise MoveError(f"{record['name']} is back, but the copy at {target} couldn't be deleted: {error}") from error
     return f"{record['name']} is back in {os.path.dirname(destination)}."
+
+
+def recover(journal):
+    messages = []
+    for record in journal.records():
+        if record.get("kind") != "content":
+            continue
+        if record["state"] == "copying":
+            _discard(record, journal)
+            messages.append(f"{record['name']}: the move was interrupted, so nothing changed")
+        elif record["state"] == "removing":
+            _finish_removal(record, journal)
+            messages.append(f"{record['name']}: finished the interrupted move")
+    return messages
+
+
+__all__ = ["Cancelled", "content_target", "free_name", "move_item", "problem_with", "recover", "undo"]
