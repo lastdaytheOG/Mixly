@@ -138,3 +138,16 @@ def move(name, root, journal, run=_run, paths=base_paths):
     }
     journal.put(record)
     return record
+
+
+def undo(record_id, journal, run=_run, paths=base_paths):
+    record = journal.get(record_id)
+    _state_of(record["distro"], run)
+    _run_move(record["distro"], record["source"], run)
+    if key(paths().get(record["distro"], "")) != key(record["source"]):
+        raise WslError(f"wsl reported success, but {record['distro']} didn't move back")
+    try:
+        os.rmdir(record["target"])
+    except OSError:
+        pass
+    journal.remove(record_id)
