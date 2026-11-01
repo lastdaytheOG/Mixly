@@ -58,3 +58,13 @@ def _check_root(check, same_drive_ok):
         check.problems.append(f"{drive} is {filesystem or 'unreadable'}, and junctions need NTFS")
     if not same_drive_ok and drive == volumes.drive_of(check.source):
         check.problems.append(f"{check.source} is already on {drive}")
+
+
+def _check_overlap(check, journal):
+    if is_within(check.target, check.source) or is_within(check.root, check.source):
+        check.problems.append("the destination is inside the folder being moved")
+    for record in journal.records():
+        for known in (record.get("source"), record.get("target")):
+            if known and (is_within(check.source, known) or is_within(known, check.source)):
+                check.problems.append(f"{check.source} overlaps {known}, which Mixly already moved")
+                return
