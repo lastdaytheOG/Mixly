@@ -202,3 +202,15 @@ def relocate(tool, root, folders, files, rewrites, journal, progress=None, cance
     record["state"] = "moved"
     journal.put(record)
     return record
+
+
+def move_steam(tool, library, journal, progress=None, cancel=None, names=None, same_drive_ok=False):
+    folders, files = steam_paths(tool, library)
+    return relocate(tool, library, folders, files, [], journal, progress, cancel, names, same_drive_ok)
+
+
+def move_epic(tool, root, journal, progress=None, cancel=None, names=None, manifests=None, launcher_file=None, same_drive_ok=False):
+    source = os.path.abspath(tool.source)
+    target = os.path.join(normalize_root(root), "Epic Games", os.path.basename(source))
+    rewrites = epic_files_for(source, manifests, launcher_file)
+    return relocate(tool, root, [(source, target)], [], rewrites, journal, progress, cancel, names, same_drive_ok)
