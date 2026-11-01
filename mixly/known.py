@@ -144,3 +144,31 @@ def finish(record_id, journal, api=None):
     record["state"] = "finished"
     journal.put(record)
     return record
+
+
+def undo(record_id, journal, api=None, progress=None, cancel=None):
+    folders = api or WindowsFolders()
+    record = journal.get(record_id)
+    folder_id = _folder_id(record["known"])
+    active = processes.running_from(record["target"])
+    if active:
+        names = sorted({os.path.basename(path) for path in active})
+        raise MoveError(f"close {', '.join(names)} first")
+    size = measure(record["target"])[0]
+    if volumes.free_bytes(volumes.drive_of(record["source"])) < size:
+        raise MoveError(f"not enough free space on {volumes.drive_of(record['source'])}")
+    restore = record["source"] + RESTORE_SUFFIX
+    remove_tree(restore)
+    try:
+        copy_and_verify(record["target"], restore, size, progress, cancel)
+    except BaseException:
+        remove_tree(restore)
+        raise
+    record["previous_state"] = record["state"]
+    record["state"] = "restoring"
+    journal.put(record)
+    remove_tree(record["source"])
+    os.rename(long_path(restore), long_path(record["source"]))
+    folders.set(folder_id, record["source"])
+    _discard(record, journal)
+    return f"{record['name']} is back where it started."
