@@ -81,3 +81,62 @@ def list_services():
 def in_folder(folder, listing=None):
     available = list_services() if listing is None else listing
     return [service for service in available if is_within(service.path, folder)]
+
+
+def _sc(arguments):
+    return subprocess.run(["sc.exe", *arguments], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+
+
+def state_of(name, run=_sc):
+    match = STATE.search(run(["query", name]).stdout or "")
+    return int(match.group(1)) if match else None
+
+
+def _wait_for(name, wanted, run, timeout, wait):
+    deadline = time.monotonic() + timeout
+    while True:
+        if state_of(name, run) == wanted:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        wait(0.5)
+
+
+def stop(name, run=_sc, timeout=45, wait=time.sleep):
+    if state_of(name, run) != RUNNING:
+        return False
+    run(["stop", name])
+    if not _wait_for(name, STOPPED, run, timeout, wait):
+        raise ServiceError(f"the Windows service {name} wouldn't stop")
+    return True
+
+
+def start(name, run=_sc, timeout=45, wait=time.sleep):
+    run(["start", name])
+    if not _wait_for(name, RUNNING, run, timeout, wait):
+        raise ServiceError(f"the Windows service {name} wouldn't start")
+
+
+def stop_all(names, run=_sc, timeout=45, wait=time.sleep):
+    stopped = []
+    try:
+        for name in names:
+            if stop(name, run, timeout, wait):
+                stopped.append(name)
+    except ServiceError:
+        start_quietly(stopped, run, timeout, wait)
+        raise
+    return stopped
+
+
+def start_all(names, run=_sc, timeout=45, wait=time.sleep):
+    for name in names:
+        start(name, run, timeout, wait)
+
+
+def start_quietly(names, run=_sc, timeout=45, wait=time.sleep):
+    for name in names:
+        try:
+            start(name, run, timeout, wait)
+        except ServiceError:
+            continue
