@@ -61,3 +61,66 @@ class WindowsFolders:
         if result != 0:
             raise OSError(f"Windows refused the new folder location ({result & 0xFFFFFFFF:#x})")
         shell.SHChangeNotify(SHCNE_ASSOCCHANGED, 0, None, None)
+
+
+def _folder_id(name):
+    return FOLDERS[name][1] if name in FOLDERS else name
+
+
+def blocked_reason(path):
+    if "onedrive" in path.lower():
+        return "OneDrive manages this folder, so move it from OneDrive's settings"
+    return None
+
+
+def current_path(name, api=None):
+    return (api or WindowsFolders()).get(_folder_id(name))
+
+
+def move(name, root, journal, api=None, progress=None, cancel=None, same_drive_ok=False):
+    folders = api or WindowsFolders()
+    folder_id = _folder_id(name)
+    source = folders.get(folder_id)
+    reason = blocked_reason(source)
+    if reason:
+        raise MoveError(reason)
+    check = preflight.run(source, root, journal, None, same_drive_ok)
+    if check.problems:
+        raise MoveError("; ".join(check.problems))
+    record = {
+        "id": new_id(),
+        "kind": "known",
+        "known": name,
+        "name": FOLDERS[name][0] if name in FOLDERS else name,
+        "tool": None,
+        "source": check.source,
+        "target": check.target,
+        "backup": check.source,
+        "root": check.root,
+        "bytes": check.size,
+        "files": check.files,
+        "created": int(time.time()),
+        "pointer": False,
+        "state": "copying",
+    }
+    journal.put(record)
+    try:
+        lock_destination(check.root, check.target)
+        copy_and_verify(check.source, check.target, check.size, progress, cancel)
+        record["state"] = "switching"
+        journal.put(record)
+        folders.set(folder_id, check.target)
+    except BaseException as error:
+        _discard(record, journal)
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']}: {error}") from error
+        raise
+    record["state"] = "moved"
+    journal.put(record)
+    return record
+
+
+def _discard(record, journal):
+    remove_tree(record["target"])
+    prune_empty(record["target"], normalize_root(record["root"]))
+    journal.remove(record["id"])
