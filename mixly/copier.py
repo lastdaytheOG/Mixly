@@ -66,15 +66,34 @@ def measure(root):
     size = files = 0
     unsupported = []
     drivers = []
-    for relative, kind, info in walk(root):
-        if kind == "file":
-            size += info.st_size
-            files += 1
-            if relative.lower().endswith(".sys"):
-                drivers.append(relative)
-        elif kind == "other":
-            unsupported.append(relative)
+    base = long_path(root)
+    stack = [(base, "")]
+    while stack:
+        folder, prefix = stack.pop()
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                kind = kind_of(entry.stat(follow_symlinks=False))
+                if kind == "dir":
+                    stack.append((entry.path, prefix + entry.name + os.sep))
+                elif kind == "file":
+                    size += entry.stat(follow_symlinks=False).st_size
+                    files += 1
+                    if entry.name.lower().endswith(".sys"):
+                        drivers.append(prefix + entry.name)
+                elif kind == "other":
+                    unsupported.append(prefix + entry.name)
     return size, files, unsupported, drivers
+
+
+def copy_file_verified(source, target, on_bytes=None, cancel=None):
+    source_path, target_path = long_path(source), long_path(target)
+    info = os.lstat(source_path)
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    digest = _copy_file(source_path, target_path, info, on_bytes, cancel)
+    copy_root_permissions(source, target)
+    if _hash_file(target_path, on_bytes, cancel) != digest:
+        raise CopyError(f"{os.path.basename(source)} failed its checksum")
+    return info.st_size
 
 
 def _apply_attributes(path, info):
