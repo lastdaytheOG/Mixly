@@ -155,3 +155,31 @@ def _finish_removal(record, journal):
     remove_tree(record["backup"])
     record["state"] = "finished"
     journal.put(record)
+
+
+def undo(record_id, journal, progress=None, cancel=None):
+    record = journal.get(record_id)
+    target, source = record["target"], record["source"]
+    if not os.path.lexists(target):
+        journal.remove(record_id)
+        return f"{record['name']} is no longer at {target}, so it was removed from this list."
+    destination = free_name(source)
+    size = _size_of(target)
+    drive = volumes.drive_of(destination)
+    if volumes.free_bytes(drive) < size:
+        raise MoveError(f"not enough free space on {drive}")
+    restore = destination + RESTORE_SUFFIX
+    remove_tree(restore)
+    try:
+        _copy(target, restore, size, progress, cancel)
+    except BaseException as error:
+        remove_tree(restore)
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']}: {error}") from error
+        raise
+    os.rename(long_path(restore), long_path(destination))
+    try:
+        _discard(record, journal)
+    except OSError as error:
+        raise MoveError(f"{record['name']} is back, but the copy at {target} couldn't be deleted: {error}") from error
+    return f"{record['name']} is back in {os.path.dirname(destination)}."
