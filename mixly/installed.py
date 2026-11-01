@@ -171,7 +171,8 @@ def find_apps(sources=SOURCES, discover=False):
         location = location_of(values)
         if not location or not os.path.isdir(location) or protected_reason(location):
             continue
-        candidates.setdefault(location.lower(), Tool(f"app:{name}", str(values["DisplayName"]), location))
+        uninstall = str(values.get("UninstallString") or "")
+        candidates.setdefault(location.lower(), Tool(f"app:{name}", str(values["DisplayName"]), location, uninstall=uninstall))
     if discover:
         _add_discovered(candidates, shortcuts() + app_paths(), program_files_folders())
     apps = []
