@@ -78,6 +78,7 @@ def move(source, root, journal, store, tool=None, progress=None, cancel=None, sa
         "files": check.files,
         "created": int(time.time()),
         "pointer": True,
+        "processes": list(tool.processes) if tool else [],
         "state": "copying",
     }
     journal.put(record)
@@ -141,11 +142,12 @@ def undo(record_id, journal, store, progress=None, cancel=None, names=None):
     record = journal.get(record_id)
     if record["kind"] != "folder" or record["state"] not in MOVED_STATES:
         raise MoveError(f"{record['name']} can't be undone from state {record['state']}")
-    tool = _tool_of(record)
-    if tool is not None and tool.processes:
-        active = processes.still_running(tool.processes, names)
-        if active:
-            raise MoveError(f"close {', '.join(active)} first")
+    if not os.path.isdir(record["target"]):
+        return _forget_removed(record, journal, store)
+    active = processes.still_running(record.get("processes", []), names)
+    active += sorted({os.path.basename(path) for path in processes.running_from(record["target"])})
+    if active:
+        raise MoveError(f"close {', '.join(active)} first")
     size = measure(record["target"])[0]
     if volumes.free_bytes(volumes.drive_of(record["source"])) < size:
         raise MoveError(f"not enough free space on {volumes.drive_of(record['source'])}")
@@ -165,6 +167,24 @@ def undo(record_id, journal, store, progress=None, cancel=None, names=None):
             raise MoveError(f"{record['name']}: {error}") from error
         raise
     _complete_undo(record, journal, store)
+    return f"{record['name']} is back where it started."
+
+
+def _forget_removed(record, journal, store):
+    drive = volumes.drive_of(record["target"])
+    if not os.path.exists(f"{drive}\\"):
+        raise MoveError(f"{drive} isn't connected, so {record['name']} can't be undone yet")
+    if record.get("env_applied"):
+        environment.restore_changes(store, record["env"], record["source"], record["target"])
+    if is_junction(record["source"]):
+        remove_junction(record["source"])
+    restored = os.path.lexists(record["backup"]) and not os.path.lexists(record["source"])
+    if restored:
+        os.rename(long_path(record["backup"]), long_path(record["source"]))
+    journal.remove(record["id"])
+    if restored:
+        return f"{record['name']} was missing from {record['target']}, so the old copy was put back."
+    return f"{record['name']} was already gone from {record['target']}, so its link was removed."
 
 
 def _complete_undo(record, journal, store):
