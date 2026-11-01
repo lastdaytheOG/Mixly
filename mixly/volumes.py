@@ -5,6 +5,7 @@ import string
 from dataclasses import dataclass
 
 DRIVE_FIXED = 3
+DRIVE_REMOVABLE = 2
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class Drive:
     filesystem: str
     free: int
     total: int
+    removable: bool = False
 
     @property
     def root(self):
@@ -41,18 +43,22 @@ def free_bytes(drive):
     return shutil.disk_usage(f"{drive.rstrip(chr(92))}\\").free
 
 
-def list_drives():
+def list_drives(include_removable=False):
     mask = ctypes.windll.kernel32.GetLogicalDrives()
+    allowed = (DRIVE_FIXED, DRIVE_REMOVABLE) if include_removable else (DRIVE_FIXED,)
     drives = []
     for index, letter in enumerate(string.ascii_uppercase):
-        if not mask >> index & 1 or drive_type(f"{letter}:") != DRIVE_FIXED:
+        if not mask >> index & 1:
+            continue
+        kind = drive_type(f"{letter}:")
+        if kind not in allowed:
             continue
         label, filesystem = volume_info(f"{letter}:")
         try:
             usage = shutil.disk_usage(f"{letter}:\\")
         except OSError:
             continue
-        drives.append(Drive(letter, label, filesystem, usage.free, usage.total))
+        drives.append(Drive(letter, label, filesystem, usage.free, usage.total, kind == DRIVE_REMOVABLE))
     return drives
 
 
