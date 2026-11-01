@@ -69,3 +69,23 @@ def standalone(sddl):
     if start < 0:
         return None
     return "D:PAI" + ACE.sub(_strip_inherited, sddl[start:])
+
+
+def write_dacl(path, sddl):
+    descriptor = ctypes.c_void_p()
+    converted = _advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl, SDDL_REVISION_1, ctypes.byref(descriptor), None
+    )
+    if not converted:
+        _fail()
+    try:
+        if not _advapi.SetFileSecurityW(long_path(path), DACL_SECURITY_INFORMATION, descriptor):
+            _fail()
+    finally:
+        _kernel.LocalFree(descriptor)
+
+
+def copy_root_permissions(source, target):
+    sddl = standalone(read_dacl(source))
+    if sddl is not None:
+        write_dacl(target, sddl)
