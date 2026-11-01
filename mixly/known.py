@@ -172,3 +172,32 @@ def undo(record_id, journal, api=None, progress=None, cancel=None):
     folders.set(folder_id, record["source"])
     _discard(record, journal)
     return f"{record['name']} is back where it started."
+
+
+def recover(journal, api=None):
+    folders = api or WindowsFolders()
+    messages = []
+    for record in journal.records():
+        if record.get("kind") != "known":
+            continue
+        folder_id = _folder_id(record["known"])
+        if record["state"] == "copying":
+            _discard(record, journal)
+            messages.append(f"{record['name']}: the move was interrupted, so nothing changed")
+        elif record["state"] == "switching":
+            if key(folders.get(folder_id)) == key(record["target"]):
+                record["state"] = "moved"
+                journal.put(record)
+                messages.append(f"{record['name']}: the move had finished")
+            else:
+                _discard(record, journal)
+                messages.append(f"{record['name']}: the move was interrupted, so nothing changed")
+        elif record["state"] == "restoring":
+            restore = record["source"] + RESTORE_SUFFIX
+            if os.path.isdir(restore):
+                remove_tree(record["source"])
+                os.rename(long_path(restore), long_path(record["source"]))
+            folders.set(folder_id, record["source"])
+            _discard(record, journal)
+            messages.append(f"{record['name']}: finished the interrupted undo")
+    return messages
