@@ -3,11 +3,13 @@ import time
 import tkinter as tk
 from unittest import mock
 
+from mixly.caches import Cache
 from mixly.catalog import Tool
+from mixly.copier import Cancelled
 from mixly.gui import App
 from mixly.journal import Journal
 from mixly.links import is_junction
-from mixly.scan import DEVELOPER, GAMES, STAYS, Found
+from mixly.scan import CACHES, CAN_CLEAR, DEVELOPER, GAMES, LARGE, STAYS, Found
 from tests.helpers import MemoryEnv, TempCase
 
 
@@ -102,6 +104,63 @@ class GuiTests(TempCase):
         self.app.toggle("app:1")
         self.assertNotIn("app:1", self.app.checked)
         self.assertIn("it runs a service", self.app.log.get("1.0", "end"))
+
+    def test_move_everything_skips_what_wont_fit(self):
+        self.write("big/a.bin", "x" * 1000)
+        self.app._show_found(Found("big", "Big", self.path("big"), 1000, "ready"))
+        with mock.patch("mixly.gui.volumes.free_bytes", return_value=100):
+            self.app.start_move_everything(ask=False)
+            self.settle()
+        self.assertTrue(is_junction(self.tool.source))
+        self.assertFalse(is_junction(self.path("big")))
+        self.assertIn("doesn't fit", self.app.log.get("1.0", "end"))
+
+    def test_stop_pauses_and_move_continues(self):
+        self.app.toggle("tool")
+        with mock.patch("mixly.mover.copy_tree", side_effect=Cancelled()):
+            self.app.start_move()
+            self.settle()
+        self.assertEqual(self.journal.records()[0]["state"], "paused")
+        self.assertEqual(self.app.rows["tool"].status, "paused")
+        self.app.toggle("tool")
+        self.app.start_move()
+        self.settle()
+        self.assertTrue(is_junction(self.tool.source))
+        self.assertEqual(self.app.rows["tool"].status, "moved")
+
+    def test_clear_selected_caches(self):
+        self.write("cache/a.bin", "abc")
+        cache = Cache("one", "One cache", self.path("cache"))
+        self.app._show_found(Found("cache:one", "One cache", self.path("cache"), 3, CAN_CLEAR, category=CACHES, cache=cache))
+        self.app.show.set(CACHES)
+        self.app._refresh_rows()
+        self.app.toggle("cache:one")
+        self.app.start_clear(ask=False)
+        self.settle()
+        self.assertEqual(os.listdir(self.path("cache")), [])
+        self.assertIn("freed", self.app.log.get("1.0", "end"))
+
+    def test_clear_with_nothing_ticked_deletes_nothing(self):
+        self.write("cache/a.bin", "abc")
+        self.app.start_clear(ask=False)
+        self.settle()
+        self.assertEqual(os.listdir(self.path("cache")), ["a.bin"])
+
+    def test_large_folders_appear_and_can_move(self):
+        self.write("big/a/one.bin", "x" * 100)
+        self.write("big/b/two.bin", "x" * 100)
+        self.app.space_root = self.path("big")
+        self.app.space_minimum = 50
+        self.app.start_space()
+        self.settle()
+        self.assertEqual(self.app.show.get(), LARGE)
+        row = self.path("big")
+        self.assertEqual(self.app.rows[row].status, "ready")
+        self.app.toggle(row)
+        self.app.start_move()
+        self.settle()
+        self.assertTrue(is_junction(row))
+        self.assertEqual(self.app.rows[row].status, "moved")
 
     def test_move_with_nothing_ticked_changes_nothing(self):
         self.app.start_move()
