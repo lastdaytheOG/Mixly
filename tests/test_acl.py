@@ -1,7 +1,8 @@
 import os
 import subprocess
+from unittest import mock
 
-from mixly.acl import copy_root_permissions, read_dacl, standalone
+from mixly.acl import copy_root_permissions, lock_chain, read_dacl, standalone
 from mixly.copier import copy_tree
 from tests.helpers import TempCase
 
@@ -31,6 +32,24 @@ class AclTests(TempCase):
         copy_root_permissions(self.path("src"), self.path("dst"))
         self.assertEqual(standalone(read_dacl(self.path("dst"))), standalone(read_dacl(self.path("src"))))
         self.assertTrue(read_dacl(self.path("dst")).startswith("D:P"))
+
+    def test_lock_chain_stops_at_the_top(self):
+        with mock.patch("mixly.acl.write_dacl") as write:
+            lock_chain(self.path("dest", "Mixly"), self.path("dest", "Mixly", "C", "Users"))
+        locked = [call.args[0].lower() for call in write.call_args_list]
+        self.assertEqual(locked, [self.path("dest", "Mixly", "C", "Users").lower(), self.path("dest", "Mixly", "C").lower(), self.path("dest", "Mixly").lower()])
+
+    def test_lock_chain_refuses_anything_outside_the_top(self):
+        with mock.patch("mixly.acl.write_dacl") as write:
+            with self.assertRaises(ValueError):
+                lock_chain(self.path("dest", "Mixly"), self.path("dest", "Epic Games"))
+        write.assert_not_called()
+
+    def test_lock_chain_refuses_a_whole_drive(self):
+        with mock.patch("mixly.acl.write_dacl") as write:
+            with self.assertRaises(ValueError):
+                lock_chain("D:\\", "D:\\Games")
+        write.assert_not_called()
 
     def test_copied_files_inherit_the_permissions(self):
         self.write("src/inner/a.txt")
