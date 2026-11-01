@@ -99,3 +99,35 @@ def _copy_file(source, target, info, on_bytes, cancel):
                 on_bytes(len(chunk))
     _restore_stat(target, info)
     return digest.hexdigest()
+
+
+def _create_junction_allowing_missing_target(resolved, link, source_path):
+    if os.path.exists(resolved):
+        create_junction(resolved, link)
+        return
+    try:
+        os.mkdir(resolved)
+    except OSError as error:
+        raise CopyError(f"{source_path} points to {resolved}, which can't be reached: {error}") from error
+    try:
+        create_junction(resolved, link)
+    finally:
+        os.rmdir(resolved)
+
+
+def _copy_link(source_path, target_path, source_root, target_root, kind, info):
+    value = os.readlink(source_path)
+    clean = strip_extended(value)
+    if os.path.isabs(clean):
+        resolved = rebase(clean, source_root, target_root) if is_within(clean, source_root) else clean
+    else:
+        resolved = value
+    if kind == "junction":
+        _create_junction_allowing_missing_target(resolved, strip_extended(target_path), source_path)
+    else:
+        is_dir = bool(info.st_file_attributes & FILE_ATTRIBUTE_DIRECTORY)
+        try:
+            os.symlink(resolved, target_path, target_is_directory=is_dir)
+        except OSError as error:
+            raise CopyError(f"couldn't recreate the link {source_path}: {error}") from error
+    return resolved
