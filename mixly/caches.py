@@ -50,8 +50,16 @@ def size_of(cache):
         return 0
 
 
+def _has_contents(path):
+    try:
+        with os.scandir(long_path(path)) as entries:
+            return next(entries, None) is not None
+    except OSError:
+        return False
+
+
 def available(catalog=CACHES):
-    return [cache for cache in catalog if os.path.isdir(real_path(cache)) and size_of(cache) > 0]
+    return [cache for cache in catalog if _has_contents(real_path(cache))]
 
 
 def clear(cache, names=None):
