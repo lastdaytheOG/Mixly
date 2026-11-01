@@ -1,10 +1,13 @@
 import os
+import shutil
+import subprocess
 from unittest import mock
 
-from mixly import preflight, volumes
+from mixly import elevation, preflight, services, volumes
 from mixly.catalog import Tool
 from mixly.journal import Journal
 from mixly.links import create_junction
+from mixly.services import Service
 from tests.helpers import TempCase
 
 
@@ -75,6 +78,33 @@ class PreflightTests(TempCase):
     def test_removable_drive_is_refused(self):
         with mock.patch.object(volumes, "drive_type", return_value=2):
             self.assertTrue(any("internal" in problem for problem in self.run_check().problems))
+
+    def test_a_folder_running_a_service_is_refused(self):
+        listing = [Service("Thing", self.path("src", "thing.exe"))]
+        with mock.patch.object(services, "list_services", return_value=listing):
+            self.assertTrue(any("Windows service Thing" in problem for problem in self.run_check().problems))
+
+    def test_an_app_with_a_driver_is_refused(self):
+        self.write("src/drv.sys")
+        check = self.run_check(tool=Tool("app:1", "App", self.path("src")))
+        self.assertTrue(any("driver drv.sys" in problem for problem in check.problems))
+
+    def test_a_game_can_keep_an_anti_cheat_driver_file(self):
+        self.write("src/BattlEye/BEDaisy.sys")
+        self.assertEqual(self.run_check(tool=Tool("steam:1", "Game", self.path("src"))).problems, [])
+
+    def test_a_running_program_is_refused(self):
+        shutil.copy(os.path.join(os.environ["windir"], "System32", "ping.exe"), self.path("src", "app.exe"))
+        process = subprocess.Popen([self.path("src", "app.exe"), "-n", "30", "127.0.0.1"], stdout=subprocess.DEVNULL)
+        try:
+            self.assertTrue(any("close app.exe" in problem for problem in self.run_check().problems))
+        finally:
+            process.kill()
+            process.wait()
+
+    def test_no_write_access_asks_for_administrator(self):
+        with mock.patch.object(elevation, "can_replace", return_value=False):
+            self.assertTrue(any("administrator" in problem for problem in self.run_check().problems))
 
     def test_mixlys_own_python_is_refused(self):
         with mock.patch.object(preflight, "_own_paths", return_value=[self.path("src", "python.exe")]):
