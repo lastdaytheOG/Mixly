@@ -39,3 +39,27 @@ def volume_info(drive):
 
 def free_bytes(drive):
     return shutil.disk_usage(f"{drive.rstrip(chr(92))}\\").free
+
+
+def list_drives():
+    mask = ctypes.windll.kernel32.GetLogicalDrives()
+    drives = []
+    for index, letter in enumerate(string.ascii_uppercase):
+        if not mask >> index & 1 or drive_type(f"{letter}:") != DRIVE_FIXED:
+            continue
+        label, filesystem = volume_info(f"{letter}:")
+        try:
+            usage = shutil.disk_usage(f"{letter}:\\")
+        except OSError:
+            continue
+        drives.append(Drive(letter, label, filesystem, usage.free, usage.total))
+    return drives
+
+
+def format_size(size):
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
