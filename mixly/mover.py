@@ -177,3 +177,43 @@ def _complete_undo(record, journal, store):
     remove_tree(record["backup"])
     _clear_target(record)
     journal.remove(record["id"])
+
+
+def _recover_restoring(record, journal, store):
+    restore = record["source"] + RESTORE_SUFFIX
+    if is_junction(record["source"]):
+        remove_tree(restore)
+        record["state"] = record.pop("previous_state")
+        journal.put(record)
+        return f"{record['name']}: the undo was interrupted, so it stays moved"
+    if not os.path.lexists(record["source"]) and os.path.isdir(restore) and not record.get("pointer"):
+        remove_tree(restore)
+        record["state"] = record.pop("previous_state")
+        journal.put(record)
+        return f"{record['name']}: the undo was interrupted, so it stays moved"
+    if not os.path.lexists(record["source"]) and not os.path.isdir(restore):
+        create_junction(record["target"], record["source"])
+        record["state"] = record.pop("previous_state")
+        journal.put(record)
+        return f"{record['name']}: the undo was interrupted, so it stays moved"
+    if not os.path.lexists(record["source"]):
+        os.rename(long_path(restore), long_path(record["source"]))
+    if record.get("env_applied"):
+        environment.restore_changes(store, record["env"], record["source"], record["target"])
+    remove_tree(record["backup"])
+    _clear_target(record)
+    journal.remove(record["id"])
+    return f"{record['name']}: finished the interrupted undo"
+
+
+def recover(journal, store):
+    messages = []
+    for record in journal.records():
+        if record.get("kind") != "folder":
+            continue
+        if record["state"] in FORWARD_STATES:
+            _rollback(record, journal, store)
+            messages.append(f"{record['name']}: the move was interrupted, so it was put back")
+        elif record["state"] == "restoring":
+            messages.append(_recover_restoring(record, journal, store))
+    return messages
