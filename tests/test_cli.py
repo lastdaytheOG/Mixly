@@ -4,6 +4,7 @@ import os
 from unittest import mock
 
 from mixly import cli
+from mixly.caches import Cache
 from mixly.catalog import Tool
 from mixly.journal import Journal
 from mixly.links import is_junction
@@ -22,18 +23,35 @@ class ScanTests(TempCase):
     def test_a_folder_with_a_service_stays_put(self):
         self.write("tool/a.txt")
         tools = (Tool("a", "A", self.path("tool")),)
-        with mock.patch("mixly.scan.services.list_services", return_value=[Service("Thing", self.path("tool", "t.exe"))]):
+        with mock.patch("mixly.scan.services.list_services", return_value=[Service("Thing", self.path("tool", "t.sys"), kind=1)]):
             found = scan(Journal(self.path("home")), tools, include_wsl=False, include_installed=False)
         self.assertEqual(found[0].status, STAYS)
         self.assertIn("Thing", found[0].reason)
+
+    def test_a_folder_with_a_normal_service_can_move(self):
+        self.write("tool/a.txt")
+        tools = (Tool("a", "A", self.path("tool")),)
+        with mock.patch("mixly.scan.services.list_services", return_value=[Service("Thing", self.path("tool", "t.exe"))]):
+            found = scan(Journal(self.path("home")), tools, include_wsl=False, include_installed=False)
+        self.assertEqual(found[0].status, "ready")
+        self.assertIn("restarts the service Thing", found[0].note)
 
     def test_an_app_with_a_driver_file_stays_put(self):
         self.write("app/drv.sys")
         with mock.patch("mixly.scan.games.all_games", return_value=[]):
             with mock.patch("mixly.scan.installed.find_apps", return_value=[Tool("app:1", "App", self.path("app"))]):
-                found = scan(Journal(self.path("home")), (), include_wsl=False)
+                found = scan(Journal(self.path("home")), (), include_wsl=False, include_extras=False)
         self.assertEqual(found[0].status, STAYS)
         self.assertIn("drv.sys", found[0].reason)
+
+    def test_empty_guessed_apps_are_hidden_but_listed_ones_stay(self):
+        self.write("guess/a.txt")
+        self.write("listed/a.txt")
+        apps = [Tool("app:folder:guess", "Guess", self.path("guess")), Tool("app:1", "Listed", self.path("listed"))]
+        with mock.patch("mixly.scan.games.all_games", return_value=[]):
+            with mock.patch("mixly.scan.installed.find_apps", return_value=apps):
+                found = scan(Journal(self.path("home")), (), include_wsl=False, include_extras=False)
+        self.assertEqual([item.id for item in found], ["app:1"])
 
     def test_something_on_another_drive_isnt_ready(self):
         self.write("tool/a.txt")
@@ -49,7 +67,7 @@ class ScanTests(TempCase):
         app = Tool("app:2", "App", self.path("app"))
         with mock.patch("mixly.scan.games.all_games", return_value=[game]):
             with mock.patch("mixly.scan.installed.find_apps", return_value=[same_game, app]):
-                found = scan(Journal(self.path("home")), (), include_wsl=False)
+                found = scan(Journal(self.path("home")), (), include_wsl=False, include_extras=False)
         self.assertEqual([(item.id, item.category) for item in found], [("steam:1", GAMES), ("app:2", APPS)])
 
 
@@ -102,6 +120,25 @@ class CliTests(TempCase):
         code, output = self.run_cli("move", "--path", self.path("nope"), "--to", self.path("dest"), "--yes")
         self.assertEqual(code, 1)
         self.assertIn("not moved", output)
+
+    def test_space_lists_large_folders(self):
+        self.write("big/a.bin", "x" * 100)
+        with mock.patch.dict(os.environ, {"SystemDrive": self.base}):
+            with mock.patch("mixly.cli.spacefinder.GIGABYTE", 10):
+                code, output = self.run_cli("space", "--min-gb", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("Reading", output)
+
+    def test_clean_clears_only_what_was_asked(self):
+        self.write("cache/a.bin", "abc")
+        cache = Cache("one", "One", self.path("cache"))
+        with mock.patch("mixly.scan.caches.available", return_value=[cache]):
+            with mock.patch("mixly.scan.known_items", return_value=[]), mock.patch("mixly.scan.store_items", return_value=[]):
+                with mock.patch("mixly.scan.appdata.save_folders", return_value=[]), mock.patch("mixly.scan.appdata.data_folders", return_value=[]):
+                    code, output = self.run_cli("clean", "one", "--yes")
+        self.assertEqual(code, 0)
+        self.assertIn("freed", output)
+        self.assertEqual(os.listdir(self.path("cache")), [])
 
     def test_unknown_undo_id_returns_an_error_code(self):
         self.assertEqual(self.run_cli("undo", "nothing")[0], 1)
