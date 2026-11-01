@@ -59,3 +59,59 @@ def _copy_and_verify(source, target, size, progress, cancel):
 
     manifest = copy_tree(source, target, advance, cancel)
     verify_tree(manifest, source, target, advance, cancel)
+
+
+def move(source, root, journal, store, tool=None, progress=None, cancel=None, same_drive_ok=False, names=None):
+    check = preflight.run(source, root, journal, tool, same_drive_ok, names)
+    if check.problems:
+        raise MoveError("; ".join(check.problems))
+    record = {
+        "id": new_id(),
+        "kind": "folder",
+        "name": tool.name if tool else os.path.basename(check.source),
+        "tool": tool.id if tool else None,
+        "source": check.source,
+        "target": check.target,
+        "backup": check.source + BACKUP_SUFFIX,
+        "root": check.root,
+        "bytes": check.size,
+        "files": check.files,
+        "created": int(time.time()),
+        "pointer": True,
+        "state": "copying",
+    }
+    journal.put(record)
+    try:
+        _copy_and_verify(check.source, check.target, check.size, progress, cancel)
+    except BaseException as error:
+        _clear_target(record)
+        journal.remove(record["id"])
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']}: {error}") from error
+        raise
+    record["state"] = "copied"
+    journal.put(record)
+    try:
+        os.rename(long_path(check.source), long_path(record["backup"]))
+    except OSError as error:
+        _clear_target(record)
+        journal.remove(record["id"])
+        raise MoveError(f"{record['name']} is in use, so nothing was changed: {error}") from error
+    record["state"] = "swapped"
+    journal.put(record)
+    try:
+        create_junction(check.target, check.source)
+        record["state"] = "linked"
+        journal.put(record)
+        if sorted(os.listdir(long_path(check.source))) != sorted(os.listdir(long_path(check.target))):
+            raise MoveError(f"the link at {check.source} doesn't show the moved files")
+        record["env"] = environment.plan_changes(store, check.source, check.target, tool.env if tool else ())
+        record["env_applied"] = True
+        journal.put(record)
+        environment.apply_changes(store, record["env"], check.source, check.target)
+    except BaseException:
+        _rollback(record, journal, store)
+        raise
+    record["state"] = "moved"
+    journal.put(record)
+    return record
