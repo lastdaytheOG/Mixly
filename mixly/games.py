@@ -112,3 +112,13 @@ def ubisoft_games():
             clean = os.path.normpath(path)
             games.append(Tool(f"ubisoft:{child}", os.path.basename(clean), clean, (), UBISOFT))
     return games
+
+
+def all_games():
+    games = []
+    for finder in (steam_games, epic_games, gog_games, ubisoft_games):
+        try:
+            games.extend(finder())
+        except OSError:
+            continue
+    return games
