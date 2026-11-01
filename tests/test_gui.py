@@ -3,13 +3,14 @@ import time
 import tkinter as tk
 from unittest import mock
 
+from mixly import content
 from mixly.caches import Cache
 from mixly.catalog import Tool
 from mixly.copier import Cancelled
 from mixly.gui import App
 from mixly.journal import Journal
 from mixly.links import is_junction
-from mixly.scan import CACHES, CAN_CLEAR, DEVELOPER, GAMES, LARGE, STAYS, Found
+from mixly.scan import APPS, CACHES, CAN_CLEAR, DEVELOPER, FILES, GAMES, LARGE, MOVED, STAYS, Found
 from tests.helpers import MemoryEnv, TempCase
 
 
@@ -30,16 +31,125 @@ class GuiTests(TempCase):
         self.addCleanup(self.root.destroy)
         self.app = App(self.root, self.journal, MemoryEnv(), (self.tool,), include_wsl=False, include_installed=False)
         self.app.selected_root = lambda: self.path("dest")
+        self.app.allow_same_drive = True
         self.settle()
 
     def settle(self):
         deadline = time.time() + 30
         while time.time() < deadline:
             self.root.update()
-            if not self.app.working and self.app.events.empty():
+            if not self.app.working and not self.app.sizing and self.app.events.empty():
                 return
             time.sleep(0.01)
         self.fail("the window never finished working")
+
+    def test_navigation_changes_the_view_and_buttons(self):
+        self.app.select_view(CACHES)
+        self.assertEqual(self.app.title_label.cget("text"), CACHES)
+        self.assertTrue(self.app.clear_button.winfo_manager())
+        self.assertFalse(self.app.move_button.winfo_manager())
+        self.app.select_view(MOVED)
+        self.assertTrue(self.app.finish_button.winfo_manager())
+
+    def test_search_filters_rows(self):
+        self.app.search.set("nothing-like-this")
+        self.assertEqual(self.app.tree.get_children(), ())
+        self.assertIn("Nothing matches", self.app.empty_label.cget("text"))
+        self.app.search.set("too")
+        self.assertEqual(self.app.tree.get_children(), ("tool",))
+
+    def test_empty_views_explain_themselves(self):
+        self.app.select_view(GAMES)
+        self.assertIn("Steam", self.app.empty_label.cget("text"))
+
+    def test_sort_by_clicking_a_heading(self):
+        self.write("big/a.bin", "x" * 50)
+        self.app._show_found(Found("big", "Aaa", self.path("big"), 50, "ready"))
+        self.app._refresh_rows()
+        self.assertEqual(self.app.tree.get_children()[0], "big")
+        self.app._on_heading("size")
+        self.assertEqual(self.app.tree.get_children()[0], "tool")
+
+    def test_heading_tick_selects_everything_shown(self):
+        self.app._on_heading("pick")
+        self.assertIn("tool", self.app.checked)
+        self.app._on_heading("pick")
+        self.assertNotIn("tool", self.app.checked)
+
+    def test_something_already_on_the_destination_cant_be_ticked(self):
+        self.app.allow_same_drive = False
+        self.app._refresh_rows()
+        self.app.toggle("tool")
+        self.assertNotIn("tool", self.app.checked)
+        self.assertIn("already on", self.app.tree.item("tool", "values")[3])
+        self.app.allow_same_drive = True
+
+    def test_files_view_browses_and_opens_folders(self):
+        self.write("place/sub/inner.txt", "abc")
+        self.write("place/top.txt", "abcd")
+        self.app.folder = self.path("place")
+        self.app.select_view(FILES)
+        self.settle()
+        rows = self.app.tree.get_children()
+        self.assertEqual(set(rows), {self.path("place", "sub"), self.path("place", "top.txt")})
+        self.app.browse(self.path("place", "sub"))
+        self.assertEqual(self.app.tree.get_children(), (self.path("place", "sub", "inner.txt"),))
+        self.app.go_up()
+        self.assertEqual(self.app.folder, self.path("place"))
+
+    def test_move_a_file_from_the_files_view(self):
+        self.write("place/movie.mkv", "video")
+        self.app.folder = self.path("place")
+        self.app.select_view(FILES)
+        self.settle()
+        row = self.path("place", "movie.mkv")
+        self.app.toggle(row)
+        original = content.move_item
+        with mock.patch("mixly.actions.content.move_item", side_effect=lambda path, root, journal, progress, cancel: original(path, root, journal, progress, cancel, True)):
+            self.app.start_move()
+            self.settle()
+        self.assertFalse(os.path.exists(row))
+        self.assertTrue(os.path.exists(self.path("dest", "movie.mkv")))
+        self.assertEqual(self.app.tree.get_children(), ())
+        self.app.select_view(MOVED)
+        rows = self.app.tree.get_children()
+        self.assertEqual(len(rows), 1)
+        self.app.toggle(rows[0])
+        self.app.start_undo()
+        self.settle()
+        self.assertTrue(os.path.exists(row))
+        self.assertFalse(os.path.exists(self.path("dest", "movie.mkv")))
+
+    def test_delete_from_the_files_view(self):
+        self.write("place/old.zip", "abc")
+        self.app.folder = self.path("place")
+        self.app.select_view(FILES)
+        self.settle()
+        row = self.path("place", "old.zip")
+        self.app.toggle(row)
+        self.app.start_delete(answer="permanent")
+        self.settle()
+        self.assertFalse(os.path.exists(row))
+        self.assertEqual(self.app.tree.get_children(), ())
+
+    def test_cancelling_delete_changes_nothing(self):
+        self.write("place/old.zip", "abc")
+        self.app.folder = self.path("place")
+        self.app.select_view(FILES)
+        self.settle()
+        row = self.path("place", "old.zip")
+        self.app.toggle(row)
+        with mock.patch.object(self.app, "_confirm", return_value=None):
+            self.app.start_delete()
+        self.settle()
+        self.assertTrue(os.path.exists(row))
+
+    def test_uninstall_uses_the_action(self):
+        found = Found("app:1", "App", self.path("app"), 1, "ready", category=APPS)
+        with mock.patch("mixly.gui.actions.uninstall", return_value="Opened it.") as uninstall:
+            self.app.start_uninstall([found])
+        uninstall.assert_called_once()
+        self.assertIn("Opened it", self.app.log.get("1.0", "end"))
 
     def test_scan_lists_the_tool(self):
         self.assertEqual(self.app.rows["tool"].status, "ready")
