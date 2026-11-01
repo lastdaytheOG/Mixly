@@ -101,3 +101,14 @@ def gog_games():
             name = _registry_value(winreg.HKEY_LOCAL_MACHINE, key, "gameName") or os.path.basename(path)
             games.append(Tool(f"gog:{child}", name, os.path.normpath(path), (), GOG))
     return games
+
+
+def ubisoft_games():
+    root = r"SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs"
+    games = []
+    for child in _registry_children(winreg.HKEY_LOCAL_MACHINE, root):
+        path = _registry_value(winreg.HKEY_LOCAL_MACHINE, f"{root}\\{child}", "InstallDir")
+        if path and os.path.isdir(path):
+            clean = os.path.normpath(path)
+            games.append(Tool(f"ubisoft:{child}", os.path.basename(clean), clean, (), UBISOFT))
+    return games
