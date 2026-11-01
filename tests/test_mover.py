@@ -197,3 +197,63 @@ class FinishTests(MoverCase):
             self.undo(record)
         self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
         self.assertIsNone(self.store.get("X_HOME"))
+
+
+class RecoverTests(MoverCase):
+    def stop_at(self, target):
+        with mock.patch(target, side_effect=KeyboardInterrupt):
+            with mock.patch("mixly.mover._rollback"), mock.patch("mixly.mover._clear_target"):
+                with mock.patch.object(self.journal, "remove"):
+                    with self.assertRaises(KeyboardInterrupt):
+                        self.move()
+
+    def assert_put_back(self):
+        self.assertEqual(mover.recover(self.journal, self.store)[0].endswith("put back"), True)
+        self.assertFalse(is_junction(self.source))
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+        self.assertFalse(os.path.lexists(self.source + ".mixly-old"))
+        self.assertFalse(os.path.exists(self.root + "\\Mixly"))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_crash_during_copy(self):
+        self.stop_at("mixly.mover.verify_tree")
+        self.assert_put_back()
+
+    def test_crash_after_the_rename(self):
+        self.stop_at("mixly.mover.create_junction")
+        self.assertFalse(os.path.lexists(self.source))
+        self.assert_put_back()
+
+    def test_crash_while_setting_variables(self):
+        self.stop_at("mixly.mover.environment.apply_changes")
+        self.assertTrue(is_junction(self.source))
+        self.assert_put_back()
+
+    def test_crash_during_undo_copy_stays_moved(self):
+        record = self.move()
+        record["previous_state"] = "moved"
+        record["state"] = "restoring"
+        self.journal.put(record)
+        self.write("src.mixly-restore/partial.txt")
+        message = mover.recover(self.journal, self.store)[0]
+        self.assertTrue(message.endswith("stays moved"))
+        self.assertTrue(is_junction(self.source))
+        self.assertFalse(os.path.lexists(self.source + ".mixly-restore"))
+        self.assertEqual(self.journal.get(record["id"])["state"], "moved")
+
+    def test_crash_during_undo_swap_completes(self):
+        record = self.move()
+        record["previous_state"] = "moved"
+        record["state"] = "restoring"
+        self.journal.put(record)
+        self.write("src.mixly-restore/bin/tool.txt", "hello")
+        os.rmdir(self.source)
+        message = mover.recover(self.journal, self.store)[0]
+        self.assertTrue(message.endswith("interrupted undo"))
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+        self.assertFalse(os.path.lexists(record["target"]))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_nothing_to_recover(self):
+        self.move()
+        self.assertEqual(mover.recover(self.journal, self.store), [])
