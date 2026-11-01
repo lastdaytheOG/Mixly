@@ -76,3 +76,65 @@ def disk_size(base):
         return os.path.getsize(os.path.join(base, DISK_NAME))
     except OSError:
         return 0
+
+
+def _state_of(name, run):
+    for distro in list_distros(run):
+        if distro["name"] == name:
+            return distro
+    raise WslError(f"{name} isn't installed")
+
+
+def _require_all_stopped(run):
+    active = [distro["name"] for distro in list_distros(run) if distro["state"].lower() != "stopped"]
+    if active:
+        names = ", ".join(active)
+        raise WslError(f"{names} still running. Save your work, then run: wsl --shutdown")
+
+
+def _run_move(name, destination, run):
+    _require_all_stopped(run)
+    run(["--shutdown"])
+    os.makedirs(destination, exist_ok=True)
+    result = run(["--manage", name, "--move", destination])
+    if result.returncode != 0:
+        message = _decode(result.stdout + result.stderr).strip()
+        raise WslError(f"wsl couldn't move {name}: {message or result.returncode}")
+
+
+def move(name, root, journal, run=_run, paths=base_paths):
+    if name.lower().startswith(RESERVED_PREFIX):
+        raise WslError(f"{name} belongs to Docker Desktop, so move it with the Docker Desktop entry")
+    _state_of(name, run)
+    _require_all_stopped(run)
+    source = paths().get(name)
+    if not source:
+        raise WslError(f"couldn't find where {name} is stored")
+    normalized = normalize_root(root)
+    drive = volumes.drive_of(normalized)
+    if drive == volumes.drive_of(source):
+        raise WslError(f"{name} is already on {drive}")
+    size = disk_size(source)
+    if volumes.free_bytes(drive) < int(size * 1.05):
+        raise WslError(f"not enough free space on {drive} for {name}")
+    destination = os.path.join(normalized, "Mixly", "WSL", name)
+    _run_move(name, destination, run)
+    if key(paths().get(name, "")) != key(destination):
+        raise WslError(f"wsl reported success, but {name} didn't move to {destination}")
+    record = {
+        "id": new_id(),
+        "kind": "wsl",
+        "name": f"WSL: {name}",
+        "distro": name,
+        "tool": None,
+        "source": source,
+        "target": destination,
+        "root": normalized,
+        "bytes": size,
+        "files": 1,
+        "created": int(time.time()),
+        "pointer": False,
+        "state": "moved",
+    }
+    journal.put(record)
+    return record
