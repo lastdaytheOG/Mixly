@@ -2,7 +2,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from . import processes, volumes
+from . import elevation, processes, services, volumes
 from .copier import measure
 from .links import is_junction, is_symlink
 from .paths import full, is_within, normalize_root, protected_reason, target_for
@@ -43,6 +43,10 @@ def _check_source(check):
         if is_within(path, check.source):
             check.problems.append(f"{check.source} is in use by Mixly itself ({path})")
             return False
+    found = services.in_folder(check.source)
+    if found:
+        check.problems.append(f"{check.source} stays put because it runs the Windows service {found[0].name}")
+        return False
     return True
 
 
@@ -78,14 +82,28 @@ def _check_leftovers(check):
             check.problems.append(f"{check.source + suffix} is still there from an earlier move")
 
 
-def _check_contents(check):
+def _check_in_use(check):
+    active = processes.running_from(check.source)
+    if active:
+        names = sorted({os.path.basename(path) for path in active})
+        check.problems.append(f"close {', '.join(names)} first")
+
+
+def _check_access(check):
+    if not elevation.can_replace(check.source):
+        check.problems.append(f"{check.source} needs administrator rights")
+
+
+def _check_contents(check, tool):
     try:
-        check.size, check.files, unsupported = measure(check.source)
+        check.size, check.files, unsupported, drivers = measure(check.source)
     except OSError as error:
         check.problems.append(f"couldn't read {check.source}: {error}")
         return
     if unsupported:
         check.problems.append(f"{unsupported[0]} can't be copied")
+    if drivers and tool is not None and tool.id.startswith("app:"):
+        check.problems.append(f"{check.source} stays put because it includes the driver {os.path.basename(drivers[0])}")
     try:
         free = volumes.free_bytes(volumes.drive_of(check.root))
     except OSError as error:
@@ -113,5 +131,7 @@ def run(source, root, journal, tool=None, same_drive_ok=False, names=None):
         active = processes.still_running(tool.processes, names)
         if active:
             check.problems.append(f"close {', '.join(active)} first")
-    _check_contents(check)
+    _check_in_use(check)
+    _check_access(check)
+    _check_contents(check, tool)
     return check
