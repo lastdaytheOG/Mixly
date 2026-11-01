@@ -23,3 +23,16 @@ def can_replace(path):
         return False
     os.rmdir(long_path(probe))
     return True
+
+
+def relaunch_command():
+    if getattr(sys, "frozen", False):
+        return sys.executable, "", None
+    package = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return sys.executable, "-m mixly", package
+
+
+def relaunch():
+    program, parameters, folder = relaunch_command()
+    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", program, parameters, folder, SW_SHOWNORMAL)
+    return result > 32
