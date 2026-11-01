@@ -45,3 +45,28 @@ def steam_paths(tool, library):
     if os.path.isfile(workshop_file):
         files.append((workshop_file, os.path.join(apps, "workshop", f"appworkshop_{appid}.acf")))
     return folders, files
+
+
+def _replace_path(value, old, new):
+    if isinstance(value, dict):
+        return {name: _replace_path(item, old, new) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_path(item, old, new) for item in value]
+    if isinstance(value, str):
+        clean = value.replace("/", "\\").lower()
+        prefix = old.replace("/", "\\").rstrip("\\").lower()
+        if clean == prefix or clean.startswith(prefix + "\\"):
+            return new + value[len(prefix):]
+    return value
+
+
+def rewrite_json(path, old, new):
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    updated = _replace_path(data, old, new)
+    temporary = path + ".mixly-tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(updated, handle, indent=4)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
