@@ -6,7 +6,7 @@ from mixly import mover
 from mixly.catalog import Tool
 from mixly.copier import Cancelled, CopyError
 from mixly.journal import Journal
-from mixly.links import create_junction, is_junction
+from mixly.links import create_junction, is_junction, remove_tree
 from tests.helpers import MemoryEnv, TempCase
 
 
@@ -137,6 +137,38 @@ class UndoTests(MoverCase):
         self.undo(record)
         self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
         self.assertFalse(is_junction(self.source))
+
+    def test_undo_refuses_while_the_launcher_runs(self):
+        record = self.move(Tool("steam:1", "Game", self.source, processes=("steam.exe",)))
+        with self.assertRaises(mover.MoveError):
+            mover.undo(record["id"], self.journal, self.store, names={"steam.exe"})
+        self.assertTrue(is_junction(self.source))
+
+    def test_undo_after_an_uninstall_removes_the_dead_link(self):
+        record = self.move()
+        mover.finish(record["id"], self.journal)
+        remove_tree(record["target"])
+        message = mover.undo(record["id"], self.journal, self.store, names=set())
+        self.assertIn("already gone", message)
+        self.assertFalse(os.path.lexists(self.source))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_undo_with_a_lost_copy_restores_the_old_one(self):
+        record = self.move()
+        remove_tree(record["target"])
+        message = mover.undo(record["id"], self.journal, self.store, names=set())
+        self.assertIn("old copy was put back", message)
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+
+    def test_undo_waits_when_the_drive_is_missing(self):
+        record = self.move()
+        record["target"] = r"Q:\Mixly\gone"
+        self.journal.put(record)
+        with mock.patch("mixly.mover.os.path.exists", return_value=False):
+            with self.assertRaises(mover.MoveError):
+                mover.undo(record["id"], self.journal, self.store, names=set())
+        self.assertTrue(is_junction(self.source))
+        self.assertEqual(len(self.journal.records()), 1)
 
     def test_failed_undo_stays_moved(self):
         record = self.move()
