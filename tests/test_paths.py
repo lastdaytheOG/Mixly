@@ -32,9 +32,31 @@ class ProtectedTests(unittest.TestCase):
     def test_refuses_a_whole_drive(self):
         self.assertIsNotNone(protected_reason("C:\\"))
 
-    def test_refuses_windows_and_program_files(self):
+    def test_refuses_windows_and_the_program_files_folder(self):
         self.assertIsNotNone(protected_reason(os.environ["windir"]))
-        self.assertIsNotNone(protected_reason(os.path.join(os.environ["ProgramFiles"], "Docker")))
+        self.assertIsNotNone(protected_reason(os.environ["ProgramFiles"]))
+        self.assertIsNotNone(protected_reason(os.environ["ProgramData"]))
+
+    def test_refuses_shared_windows_folders_in_program_files(self):
+        for name in ("Common Files", "Windows Defender", "Microsoft Office", "dotnet"):
+            self.assertIsNotNone(protected_reason(os.path.join(os.environ["ProgramFiles"], name)), name)
+
+    def test_refuses_hardware_software(self):
+        path = os.path.join(os.environ["ProgramFiles"], "NVIDIA Corporation", "Installer2", "Display.Driver")
+        self.assertIn("hardware support", protected_reason(path))
+
+    def test_refuses_microsoft_and_installer_cache_folders(self):
+        self.assertIsNotNone(protected_reason(os.path.join(os.environ["LOCALAPPDATA"], "Microsoft", "WinGet", "Packages", "X")))
+        self.assertIsNotNone(protected_reason(os.path.join(os.environ["LOCALAPPDATA"], "Package Cache", "{id}")))
+
+    def test_points_store_apps_to_settings(self):
+        reason = protected_reason(os.path.join(os.environ["ProgramFiles"], "WindowsApps", "Some.Game"))
+        self.assertIn("Windows Settings", reason)
+        self.assertIn("Windows Settings", protected_reason(r"C:\XboxGames\Some Game"))
+
+    def test_allows_an_app_in_program_files(self):
+        self.assertIsNone(protected_reason(os.path.join(os.environ["ProgramFiles"], "Some App")))
+        self.assertIsNone(protected_reason(os.path.join(os.environ["ProgramFiles(x86)"], "Steam", "steamapps", "common", "Game")))
 
     def test_refuses_the_profile_and_appdata(self):
         self.assertIsNotNone(protected_reason(os.environ["USERPROFILE"]))
