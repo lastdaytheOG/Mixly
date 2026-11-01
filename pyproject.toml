@@ -1,0 +1,16 @@
+[project]
+name = "mixly"
+version = "0.1.0"
+description = "Move developer tools to another drive and keep them working"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+mixly = "mixly.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["mixly"]
