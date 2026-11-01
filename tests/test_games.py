@@ -36,3 +36,20 @@ class SteamTests(TempCase):
     def test_skips_a_manifest_with_no_folder_on_disk(self):
         self.write("Steam/steamapps/appmanifest_30.acf", '"installdir" "missing"')
         self.assertNotIn("steam:30", {game.id for game in steam_games(self.path("Steam"))})
+
+
+class EpicTests(TempCase):
+    def add(self, name, **values):
+        self.write(f"manifests/{name}.item", json.dumps(values))
+
+    def test_finds_installed_games(self):
+        self.write("games/Fort/game.exe")
+        self.add("a", DisplayName="Fort", AppName="fort", InstallLocation=self.path("games", "Fort"))
+        games = epic_games(self.path("manifests"))
+        self.assertEqual([(game.id, game.name, game.source) for game in games], [("epic:fort", "Fort", self.path("games", "Fort"))])
+
+    def test_skips_incomplete_and_broken_manifests(self):
+        self.write("games/Half/game.exe")
+        self.add("a", DisplayName="Half", InstallLocation=self.path("games", "Half"), bIsIncompleteInstall=True)
+        self.write("manifests/b.item", "not json")
+        self.assertEqual(epic_games(self.path("manifests")), [])
