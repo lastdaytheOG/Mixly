@@ -133,3 +133,11 @@ def move(package, name, root, journal, run=_powershell):
     }
     journal.put(record)
     return record
+
+
+def undo(record_id, journal, run=_powershell):
+    record = journal.get(record_id)
+    volume = f"{volumes.drive_of(record['source'])}\\"
+    _run_move(record["name"], record["package"], volume, run)
+    journal.remove(record_id)
+    return f"{record['name']} is back where it started."
