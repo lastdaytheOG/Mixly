@@ -4,6 +4,7 @@ import os
 import stat
 from dataclasses import dataclass
 
+from .acl import copy_root_permissions
 from .links import create_junction
 from .paths import is_within, long_path, rebase, strip_extended
 
@@ -64,13 +65,16 @@ def walk(root):
 def measure(root):
     size = files = 0
     unsupported = []
+    drivers = []
     for relative, kind, info in walk(root):
         if kind == "file":
             size += info.st_size
             files += 1
+            if relative.lower().endswith(".sys"):
+                drivers.append(relative)
         elif kind == "other":
             unsupported.append(relative)
-    return size, files, unsupported
+    return size, files, unsupported, drivers
 
 
 def _apply_attributes(path, info):
@@ -139,6 +143,7 @@ def copy_tree(source, target, on_bytes=None, cancel=None):
     folders = [("", os.lstat(source_base))]
     links = []
     os.makedirs(target_base)
+    copy_root_permissions(source, target)
     for relative, kind, info in walk(source):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
