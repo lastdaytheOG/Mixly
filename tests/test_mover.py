@@ -146,3 +146,54 @@ class UndoTests(MoverCase):
         self.assertTrue(is_junction(self.source))
         self.assertEqual(self.journal.get(record["id"])["state"], "moved")
         self.assertFalse(os.path.lexists(self.source + ".mixly-restore"))
+
+
+class FinishTests(MoverCase):
+    def test_finish_deletes_only_the_old_copy(self):
+        record = self.move()
+        done = mover.finish(record["id"], self.journal)
+        self.assertFalse(os.path.lexists(record["backup"]))
+        self.assertEqual(done["state"], "finished")
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+
+    def test_finish_refuses_when_the_link_is_broken(self):
+        record = self.move()
+        os.rmdir(self.source)
+        with self.assertRaises(mover.MoveError):
+            mover.finish(record["id"], self.journal)
+        self.assertTrue(os.path.exists(record["backup"]))
+
+    def test_finish_refuses_when_the_link_points_elsewhere(self):
+        record = self.move()
+        os.rmdir(self.source)
+        os.makedirs(self.path("other"))
+        create_junction(self.path("other"), self.source)
+        with self.assertRaises(mover.MoveError):
+            mover.finish(record["id"], self.journal)
+        self.assertTrue(os.path.exists(record["backup"]))
+
+    def test_remove_pointer_needs_a_tool_that_follows_its_variable(self):
+        record = self.move()
+        with self.assertRaises(mover.MoveError):
+            mover.finish(record["id"], self.journal, remove_pointer=True)
+        self.assertTrue(is_junction(self.source))
+        self.assertTrue(os.path.exists(record["backup"]))
+
+    def test_remove_pointer_leaves_nothing_behind(self):
+        tool = Tool("x", "X", self.source, env=("X_HOME",), native=True)
+        record = self.move(tool)
+        with mock.patch("mixly.mover.by_id", return_value=tool):
+            done = mover.finish(record["id"], self.journal, remove_pointer=True)
+        self.assertFalse(os.path.lexists(self.source))
+        self.assertFalse(os.path.lexists(record["backup"]))
+        self.assertFalse(done["pointer"])
+        self.assertEqual(self.read(record["target"], "bin", "tool.txt"), "hello")
+
+    def test_undo_after_removing_the_pointer(self):
+        tool = Tool("x", "X", self.source, env=("X_HOME",), native=True)
+        record = self.move(tool)
+        with mock.patch("mixly.mover.by_id", return_value=tool):
+            mover.finish(record["id"], self.journal, remove_pointer=True)
+            self.undo(record)
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+        self.assertIsNone(self.store.get("X_HOME"))
