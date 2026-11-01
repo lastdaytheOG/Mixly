@@ -68,3 +68,29 @@ def _check_overlap(check, journal):
             if known and (is_within(check.source, known) or is_within(known, check.source)):
                 check.problems.append(f"{check.source} overlaps {known}, which Mixly already moved")
                 return
+
+
+def _check_leftovers(check):
+    if os.path.lexists(check.target):
+        check.problems.append(f"{check.target} already exists")
+    for suffix in (".mixly-old", ".mixly-restore"):
+        if os.path.lexists(check.source + suffix):
+            check.problems.append(f"{check.source + suffix} is still there from an earlier move")
+
+
+def _check_contents(check):
+    try:
+        check.size, check.files, unsupported = measure(check.source)
+    except OSError as error:
+        check.problems.append(f"couldn't read {check.source}: {error}")
+        return
+    if unsupported:
+        check.problems.append(f"{unsupported[0]} can't be copied")
+    try:
+        free = volumes.free_bytes(volumes.drive_of(check.root))
+    except OSError as error:
+        check.problems.append(f"couldn't read free space: {error}")
+        return
+    needed = int(check.size * HEADROOM)
+    if free < needed:
+        check.problems.append(f"needs {volumes.format_size(needed)}, but only {volumes.format_size(free)} is free")
