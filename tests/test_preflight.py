@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from unittest import mock
 
-from mixly import elevation, preflight, services, volumes
+from mixly import elevation, preflight, processes, services, volumes
 from mixly.catalog import Tool
 from mixly.journal import Journal
 from mixly.links import create_junction
@@ -79,10 +79,47 @@ class PreflightTests(TempCase):
         with mock.patch.object(volumes, "drive_type", return_value=2):
             self.assertTrue(any("internal" in problem for problem in self.run_check().problems))
 
-    def test_a_folder_running_a_service_is_refused(self):
+    def test_a_driver_service_is_refused(self):
+        listing = [Service("Thing", self.path("src", "thing.sys"), kind=1)]
+        with mock.patch.object(services, "list_services", return_value=listing):
+            self.assertTrue(any("early in startup" in problem for problem in self.run_check().problems))
+
+    def test_an_early_start_service_is_refused(self):
+        listing = [Service("Thing", self.path("src", "thing.exe"), start=1)]
+        with mock.patch.object(services, "list_services", return_value=listing):
+            self.assertTrue(any("early in startup" in problem for problem in self.run_check().problems))
+
+    def test_a_normal_service_needs_administrator(self):
         listing = [Service("Thing", self.path("src", "thing.exe"))]
         with mock.patch.object(services, "list_services", return_value=listing):
-            self.assertTrue(any("Windows service Thing" in problem for problem in self.run_check().problems))
+            with mock.patch.object(elevation, "is_admin", return_value=False):
+                self.assertTrue(any("administrator" in problem for problem in self.run_check().problems))
+
+    def test_a_normal_service_is_allowed_for_an_administrator(self):
+        listing = [Service("Thing", self.path("src", "thing.exe"))]
+        with mock.patch.object(services, "list_services", return_value=listing):
+            with mock.patch.object(elevation, "is_admin", return_value=True):
+                check = self.run_check()
+        self.assertEqual(check.problems, [])
+        self.assertEqual(check.services, ["Thing"])
+
+    def test_a_running_service_doesnt_count_as_an_open_program(self):
+        path = self.path("src", "thing.exe")
+        listing = [Service("Thing", path)]
+        with mock.patch.object(services, "list_services", return_value=listing):
+            with mock.patch.object(elevation, "is_admin", return_value=True):
+                with mock.patch.object(processes, "running_from", return_value=[path]):
+                    self.assertEqual(self.run_check().problems, [])
+
+    def test_a_paused_move_can_resume_only_to_the_same_place(self):
+        target = self.run_check().target
+        os.makedirs(target)
+        self.journal.put({"id": "p", "state": "paused", "source": self.path("src"), "target": target})
+        check = self.run_check()
+        self.assertEqual(check.problems, [])
+        self.assertTrue(check.resuming)
+        self.journal.put({"id": "p", "state": "paused", "source": self.path("src"), "target": self.path("elsewhere")})
+        self.assertTrue(any("paused move" in problem for problem in self.run_check().problems))
 
     def test_an_app_with_a_driver_is_refused(self):
         self.write("src/drv.sys")
