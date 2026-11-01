@@ -106,3 +106,45 @@ def settle(found, sizes=None):
     if found.status in ("ready", CAN_CLEAR) and size < found.minimum:
         found.hidden = True
     return found
+
+
+def known_items(records, sizes=None):
+    from . import known
+
+    found = []
+    for name, (label, _) in known.FOLDERS.items():
+        record = next((item for item in records if item.get("known") == name), None)
+        if record:
+            found.append(Found(f"known:{name}", label, record["source"], 0, "moved", category=PERSONAL, known=name))
+            continue
+        try:
+            path = known.current_path(name)
+        except OSError:
+            continue
+        reason = known.blocked_reason(path)
+        cached = _cached(sizes, path)
+        status = STAYS if reason else "ready"
+        note = "" if reason else "moves without a link"
+        found.append(Found(f"known:{name}", label, path, cached[0] if cached else 0, status, category=PERSONAL, reason=reason or "", known=name, note=note, pending=True))
+    return found
+
+
+def store_items(records):
+    from . import store_apps
+
+    found = []
+    for app in store_apps.list_apps():
+        record = next((item for item in records if item.get("package") == app["package"]), None)
+        if record:
+            found.append(Found(f"store:{app['package']}", app["name"], record["source"], 0, "moved", category=STORE, package=app["package"]))
+        else:
+            found.append(Found(f"store:{app['package']}", app["name"], app["location"], 0, "ready", category=STORE, package=app["package"], note="Windows decides if it can move"))
+    return found
+
+
+def cache_items(sizes=None):
+    found = []
+    for cache in caches.available():
+        cached = _cached(sizes, cache.source)
+        found.append(Found(f"cache:{cache.id}", cache.name, cache.source, cached[0] if cached else 0, CAN_CLEAR, category=CACHES, cache=cache, pending=True, minimum=1))
+    return found
