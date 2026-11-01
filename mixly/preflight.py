@@ -44,3 +44,17 @@ def _check_source(check):
             check.problems.append(f"{check.source} is in use by Mixly itself ({path})")
             return False
     return True
+
+
+def _check_root(check, same_drive_ok):
+    drive = volumes.drive_of(check.root)
+    if not drive:
+        check.problems.append(f"{check.root} isn't on a local drive")
+        return
+    if volumes.drive_type(drive) != volumes.DRIVE_FIXED:
+        check.problems.append(f"{drive} isn't an internal drive")
+    filesystem = volumes.volume_info(drive)[1]
+    if filesystem != REQUIRED_FILESYSTEM:
+        check.problems.append(f"{drive} is {filesystem or 'unreadable'}, and junctions need NTFS")
+    if not same_drive_ok and drive == volumes.drive_of(check.source):
+        check.problems.append(f"{check.source} is already on {drive}")
