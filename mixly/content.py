@@ -93,3 +93,65 @@ def _copy(source, target, size, progress, cancel):
         verify_tree(manifest, source, target, advance, cancel)
     else:
         copy_file_verified(source, target, advance, cancel)
+
+
+def move_item(path, root, journal, progress=None, cancel=None, same_drive_ok=False):
+    source = full(path)
+    problem = problem_with(source, journal)
+    if problem:
+        raise MoveError(problem)
+    normalized = normalize_root(root)
+    drive = volumes.drive_of(normalized)
+    if not same_drive_ok and drive == volumes.drive_of(source):
+        raise MoveError(f"{os.path.basename(source)} is already on {drive}")
+    size = _size_of(source)
+    needed = needed_space(size)
+    free = volumes.free_bytes(drive)
+    if free < needed:
+        raise MoveError(f"needs {volumes.format_size(needed)}, but only {volumes.format_size(free)} is free on {drive}")
+    target = free_name(content_target(normalized, source))
+    backup = source + BACKUP_SUFFIX
+    record = {
+        "id": new_id(),
+        "kind": "content",
+        "name": os.path.basename(source),
+        "tool": None,
+        "source": source,
+        "target": target,
+        "backup": backup,
+        "root": normalized,
+        "bytes": size,
+        "files": 1,
+        "created": int(time.time()),
+        "pointer": False,
+        "state": "copying",
+    }
+    journal.put(record)
+    try:
+        _copy(source, target, size, progress, cancel)
+    except BaseException as error:
+        _discard(record, journal)
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']}: {error}") from error
+        raise
+    try:
+        os.rename(long_path(source), long_path(backup))
+    except OSError as error:
+        _discard(record, journal)
+        raise MoveError(f"{record['name']} is in use, so nothing was changed: {error}") from error
+    record["state"] = "removing"
+    journal.put(record)
+    _finish_removal(record, journal)
+    return record
+
+
+def _discard(record, journal):
+    remove_tree(record["target"])
+    prune_empty(record["target"], normalize_root(record["root"]))
+    journal.remove(record["id"])
+
+
+def _finish_removal(record, journal):
+    remove_tree(record["backup"])
+    record["state"] = "finished"
+    journal.put(record)
