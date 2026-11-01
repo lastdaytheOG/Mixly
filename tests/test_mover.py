@@ -7,6 +7,7 @@ from mixly.catalog import Tool
 from mixly.copier import Cancelled, CopyError
 from mixly.journal import Journal
 from mixly.links import create_junction, is_junction, remove_tree
+from mixly.services import Service, ServiceError
 from tests.helpers import MemoryEnv, TempCase
 
 
@@ -72,12 +73,46 @@ class MoveTests(MoverCase):
         self.assertFalse(os.path.exists(self.root + "\\Mixly"))
         self.assertEqual(self.journal.records(), [])
 
-    def test_cancel_leaves_the_source_alone(self):
+    def test_stop_pauses_and_leaves_the_source_alone(self):
         cancel = threading.Event()
         cancel.set()
         with self.assertRaises(Cancelled):
             self.move(cancel=cancel)
         self.assertFalse(is_junction(self.source))
+        self.assertEqual(self.journal.records()[0]["state"], "paused")
+
+    def test_paused_move_continues_without_recopying(self):
+        cancel = threading.Event()
+        original = mover.copy_tree
+        copied = []
+
+        def stop_midway(source, target, on_bytes, stop, resume):
+            manifest = original(source, target, on_bytes, None, resume)
+            cancel.set()
+            raise Cancelled()
+
+        with mock.patch("mixly.mover.copy_tree", side_effect=stop_midway):
+            with self.assertRaises(Cancelled):
+                self.move(cancel=cancel)
+        paused = self.journal.records()[0]
+        with mock.patch("mixly.copier._copy_file", side_effect=lambda *args: copied.append(args)):
+            record = self.move()
+        self.assertEqual(copied, [])
+        self.assertEqual(record["id"], paused["id"])
+        self.assertEqual(record["state"], "moved")
+        self.assertTrue(is_junction(self.source))
+        self.assertEqual(self.read(record["target"], "bin", "tool.txt"), "hello")
+
+    def test_undo_discards_a_paused_move(self):
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaises(Cancelled):
+            self.move(cancel=cancel)
+        paused = self.journal.records()[0]
+        message = mover.undo(paused["id"], self.journal, self.store, names=set())
+        self.assertIn("discarded", message)
+        self.assertFalse(os.path.lexists(paused["target"]))
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
         self.assertEqual(self.journal.records(), [])
 
     def test_locked_folder_leaves_the_source_alone(self):
@@ -231,6 +266,81 @@ class FinishTests(MoverCase):
         self.assertIsNone(self.store.get("X_HOME"))
 
 
+class ServiceTests(MoverCase):
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+        self.listing = [Service("Thing", self.path("src", "bin", "thing.exe"))]
+        for patcher in (
+            mock.patch("mixly.preflight.services.list_services", return_value=self.listing),
+            mock.patch("mixly.preflight.elevation.is_admin", return_value=True),
+            mock.patch("mixly.mover.lock_destination"),
+            mock.patch("mixly.mover.services.stop_all", side_effect=self.stop_all),
+            mock.patch("mixly.mover.services.start_all", side_effect=self.start_all),
+            mock.patch("mixly.mover.services.start_quietly", side_effect=self.start_quietly),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def stop_all(self, names):
+        self.calls.append(("stop", list(names)))
+        return list(names)
+
+    def start_all(self, names):
+        self.calls.append(("start", list(names)))
+
+    def start_quietly(self, names):
+        self.calls.append(("quiet", list(names)))
+
+    def test_move_stops_then_restarts_the_service(self):
+        record = self.move()
+        self.assertEqual(self.calls, [("stop", ["Thing"]), ("start", ["Thing"])])
+        self.assertTrue(is_junction(self.source))
+        self.assertEqual(record["services"], ["Thing"])
+        self.assertEqual(record["stopped_services"], [])
+
+    def test_service_that_wont_stop_changes_nothing(self):
+        with mock.patch("mixly.mover.services.stop_all", side_effect=ServiceError("wouldn't stop")):
+            with self.assertRaises(mover.MoveError):
+                self.move()
+        self.assertFalse(is_junction(self.source))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_service_that_wont_restart_puts_everything_back(self):
+        with mock.patch("mixly.mover.services.start_all", side_effect=ServiceError("wouldn't start")):
+            with self.assertRaises(mover.MoveError) as caught:
+                self.move()
+        self.assertIn("put back", str(caught.exception))
+        self.assertFalse(is_junction(self.source))
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+        self.assertIn(("quiet", ["Thing"]), self.calls)
+        self.assertEqual(self.journal.records(), [])
+
+    def test_another_program_still_open_stops_the_move(self):
+        with mock.patch("mixly.mover.processes.running_from", return_value=[self.path("src", "bin", "other.exe")]):
+            with self.assertRaises(mover.MoveError):
+                mover._check_nothing_else_runs({"source": self.source})
+
+    def test_undo_stops_and_restarts_the_service(self):
+        record = self.move()
+        self.calls.clear()
+        self.undo(record)
+        self.assertEqual(self.calls[0], ("stop", ["Thing"]))
+        self.assertIn(("quiet", ["Thing"]), self.calls)
+        self.assertFalse(is_junction(self.source))
+
+    def test_crash_while_stopped_restarts_on_recovery(self):
+        record = self.move()
+        record["state"] = "copied"
+        record["stopped_services"] = ["Thing"]
+        self.journal.put(record)
+        os.rmdir(self.source)
+        os.rename(record["backup"], self.source)
+        mover.recover(self.journal, self.store)
+        self.assertIn(("quiet", ["Thing"]), self.calls)
+        self.assertEqual(self.journal.records(), [])
+
+
 class RecoverTests(MoverCase):
     def stop_at(self, target):
         with mock.patch(target, side_effect=KeyboardInterrupt):
@@ -247,9 +357,15 @@ class RecoverTests(MoverCase):
         self.assertFalse(os.path.exists(self.root + "\\Mixly"))
         self.assertEqual(self.journal.records(), [])
 
-    def test_crash_during_copy(self):
+    def test_crash_during_copy_can_continue(self):
         self.stop_at("mixly.mover.verify_tree")
-        self.assert_put_back()
+        message = mover.recover(self.journal, self.store)[0]
+        self.assertIn("continue", message)
+        self.assertFalse(is_junction(self.source))
+        self.assertEqual(self.journal.records()[0]["state"], "paused")
+        record = self.move()
+        self.assertEqual(record["state"], "moved")
+        self.assertTrue(is_junction(self.source))
 
     def test_crash_after_the_rename(self):
         self.stop_at("mixly.mover.create_junction")
