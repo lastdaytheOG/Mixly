@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pyinstaller==6.11.1
-      - run: pyinstaller --onefile --windowed --name mixly --paths . packaging/mixly_app.py
+      - run: pyinstaller --onefile --windowed --uac-admin --name mixly --paths . packaging/mixly_app.py
       - uses: actions/upload-artifact@v4
         with:
           name: mixly
