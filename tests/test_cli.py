@@ -8,8 +8,9 @@ from mixly.caches import Cache
 from mixly.catalog import Tool
 from mixly.journal import Journal
 from mixly.links import is_junction
-from mixly.scan import APPS, GAMES, STAYS, scan
+from mixly.scan import APPS, GAMES, STAYS, discover, identify, scan, settle
 from mixly.services import Service
+from mixly.sizes import SizeCache
 from tests.helpers import MemoryEnv, TempCase
 
 
@@ -53,11 +54,35 @@ class ScanTests(TempCase):
                 found = scan(Journal(self.path("home")), (), include_wsl=False, include_extras=False)
         self.assertEqual([item.id for item in found], ["app:1"])
 
-    def test_something_on_another_drive_isnt_ready(self):
+    def test_something_on_another_drive_can_still_move(self):
         self.write("tool/a.txt")
         with mock.patch("mixly.scan.volumes.drive_of", return_value="D:"):
             found = scan(Journal(self.path("home")), (Tool("a", "A", self.path("tool")),), include_wsl=False, include_installed=False)
-        self.assertEqual(found[0].status, "already on D:")
+        self.assertEqual(found[0].status, "ready")
+
+    def test_discover_lists_rows_without_measuring(self):
+        self.write("tool/a.txt")
+        with mock.patch("mixly.scan.measure") as measure:
+            found = discover(Journal(self.path("home")), (Tool("a", "A", self.path("tool")),), False, None, False, False)
+        measure.assert_not_called()
+        self.assertTrue(found[0].pending)
+
+    def test_saved_sizes_show_straight_away_and_refresh(self):
+        self.write("tool/a.txt", "abc")
+        sizes = SizeCache(self.path("home"))
+        sizes.put(self.path("tool"), 999)
+        found = discover(Journal(self.path("home")), (Tool("a", "A", self.path("tool")),), False, None, False, False, sizes)
+        self.assertEqual(found[0].size, 999)
+        settle(found[0], sizes)
+        self.assertEqual(found[0].size, 3)
+        self.assertEqual(sizes.get(self.path("tool"))[0], 3)
+
+    def test_a_saved_driver_blocks_an_app_straight_away(self):
+        self.write("app/a.txt")
+        sizes = SizeCache(self.path("home"))
+        sizes.put(self.path("app"), 1, "drv.sys")
+        found = identify(Tool("app:1", "App", self.path("app")), {}, APPS, [], 0, sizes)
+        self.assertEqual(found.status, STAYS)
 
     def test_finds_games_and_apps_and_skips_duplicates(self):
         self.write("game/a.txt")
@@ -128,6 +153,18 @@ class CliTests(TempCase):
                 code, output = self.run_cli("space", "--min-gb", "1")
         self.assertEqual(code, 0)
         self.assertIn("Reading", output)
+
+    def test_move_file_and_delete_commands(self):
+        self.write("Downloads/a.txt", "abc")
+        with mock.patch("mixly.content.problem_with", return_value=None), mock.patch("mixly.content.volumes.drive_of", side_effect=["D:", "C:"]):
+            code, output = self.run_cli("move-file", self.path("Downloads", "a.txt"), "--to", self.path("dest"))
+        self.assertEqual(code, 0, output)
+        self.assertFalse(os.path.exists(self.path("Downloads", "a.txt")))
+        self.assertTrue(os.path.exists(self.path("dest", "a.txt")))
+        with mock.patch("mixly.actions.content.problem_with", return_value=None):
+            code, output = self.run_cli("delete", self.path("dest", "a.txt"), "--permanently", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertFalse(os.path.exists(self.path("dest", "a.txt")))
 
     def test_clean_clears_only_what_was_asked(self):
         self.write("cache/a.bin", "abc")
