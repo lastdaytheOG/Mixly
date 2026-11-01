@@ -1,8 +1,10 @@
 # Mixly
 
-Free up space on a full C: drive. Move developer tools, games, apps, personal folders and large folders to another drive, clear caches you don't need, and keep everything working.
+Free up space on any full drive. Move developer tools, games, apps, personal folders and individual files between drives, clear caches you don't need, and keep everything working.
 
-Pick a drive, choose what to show, and click **Move everything shown**, or tick just what you want. Mixly copies it, checks every file, and can put it all back. It asks for administrator rights when it opens, so it can reach Program Files.
+Pick a drive under **Move to**, tick what you want, and move it: C: to D:, D: to C:, or any other drive. Mixly copies it, checks every file, and can put it all back. It asks for administrator rights when it opens, so it can reach Program Files.
+
+Rows appear straight away, and sizes fill in as they're read. Sizes are saved between runs, so opening it again shows them immediately.
 
 ## What it finds
 
@@ -13,9 +15,28 @@ Pick a drive, choose what to show, and click **Move everything shown**, or tick 
 - **Personal folders:** Downloads, Documents, Desktop, Pictures, Music and Videos
 - **Store apps:** moved by Windows itself, if it allows it
 - **Caches:** npm, Yarn, pip, uv, Go, NuGet, Gradle, Electron and shader caches
-- **Large folders:** click **Find large folders** to see what's really filling C:, including folders Mixly doesn't recognize
+- **Large folders:** pick a drive and click **Scan drive** to see what's really filling it, including folders Mixly doesn't recognize
+- **Files:** browse any drive, including what's inside Downloads, Documents and Pictures
 
 You can also add any folder of your own, like your projects.
+
+## Moving files and folders
+
+Open **Files**, or double-click a row under **Personal folders**. Tick any files or folders and click **Move to**.
+
+These moves leave nothing behind. A file from Downloads goes to `D:\Downloads\`, or straight into a folder you chose under **Move to**. Each one is copied and checked by checksum before the original is removed. If the name is already taken, the new copy becomes `name (2)`, so nothing is overwritten. Undo them from the **Moved** page.
+
+Ordinary files can also go to a USB drive. Tools and apps can't, because they need an internal NTFS drive.
+
+## Deleting and uninstalling
+
+**Delete** sends files and folders to the Recycle Bin, or deletes them permanently if you choose that instead. The Recycle Bin only gives the space back once it's emptied. Mixly refuses Windows folders, anything it has moved, and anything in use.
+
+**Uninstall** on apps and games opens the app's own uninstaller, asks Steam, or opens Windows Settings. It doesn't delete anything itself. If you've moved an app, click **Undo** on it after uninstalling to clear the leftover link.
+
+## Moving to a third drive
+
+Something Mixly already moved can be moved again. Tick it, choose a drive and click **Move to**. Choosing its original drive is the same as Undo. Choosing a third drive moves it back first, then on to the new drive, so the original drive needs enough free space for it.
 
 ## How a move works
 
@@ -62,11 +83,9 @@ Anything Mixly refuses shows as **stays put**, and clicking it tells you why. Wi
 
 Keep the destination drive connected and on the same letter. If the letter changes, moved items stop working until you change it back. Hard links between files become separate copies, so pnpm's store can grow. Games with anti-cheat may object to a moved folder, so try one before moving the rest.
 
-If you uninstall a moved app, click **Undo selected** on it afterwards to clear the leftover link.
-
 ## When it won't all fit
 
-**Move everything shown** picks the largest items that fit and tells you what stays behind. **Clear selected caches** frees space with nothing to move. It can't be undone, but your tools download or rebuild caches when they need them.
+**Move everything shown** picks the largest items that fit and tells you what stays behind. **Clear selected** on the **Caches** page frees space with nothing to move. It can't be undone, but your tools download or rebuild caches when they need them.
 
 ## Use it
 
@@ -86,7 +105,9 @@ From a terminal, opened as administrator:
 
 ```
 python -m mixly scan --category games
-python -m mixly space
+python -m mixly space --drive D:
+python -m mixly move-file "C:\Users\me\Downloads\movie.mkv" --to D:
+python -m mixly delete "C:\Users\me\Downloads\old.zip"
 python -m mixly move cargo rustup --to D:
 python -m mixly move steam:730 --to D:
 python -m mixly move known:downloads --to D:
