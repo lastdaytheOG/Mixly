@@ -105,3 +105,44 @@ class MoveTests(MoverCase):
         self.assertFalse(is_junction(self.source))
         self.assertEqual(self.store.items()["Path"][0].lower(), before["Path"][0].lower())
         self.assertEqual(self.journal.records(), [])
+
+
+class UndoTests(MoverCase):
+    def test_undo_restores_the_original_layout(self):
+        record = self.move()
+        self.undo(record)
+        self.assertFalse(is_junction(self.source))
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+        self.assertFalse(os.path.lexists(record["target"]))
+        self.assertFalse(os.path.lexists(record["backup"]))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_undo_keeps_changes_made_after_the_move(self):
+        record = self.move()
+        self.write("src/new.txt", "fresh")
+        self.undo(record)
+        self.assertEqual(self.read(self.source, "new.txt"), "fresh")
+
+    def test_undo_restores_variables(self):
+        tool = Tool("x", "X", self.source, env=("X_HOME",))
+        record = self.move(tool)
+        with mock.patch("mixly.mover.by_id", return_value=tool):
+            self.undo(record)
+        self.assertIsNone(self.store.get("X_HOME"))
+        self.assertIn(self.path("src", "bin").lower(), self.store.get("Path")[0].lower())
+
+    def test_undo_works_after_finish(self):
+        record = self.move()
+        mover.finish(record["id"], self.journal)
+        self.undo(record)
+        self.assertEqual(self.read(self.source, "bin", "tool.txt"), "hello")
+        self.assertFalse(is_junction(self.source))
+
+    def test_failed_undo_stays_moved(self):
+        record = self.move()
+        with mock.patch("mixly.mover.verify_tree", side_effect=CopyError("bad")):
+            with self.assertRaises(CopyError):
+                self.undo(record)
+        self.assertTrue(is_junction(self.source))
+        self.assertEqual(self.journal.get(record["id"])["state"], "moved")
+        self.assertFalse(os.path.lexists(self.source + ".mixly-restore"))
