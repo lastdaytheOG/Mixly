@@ -168,3 +168,37 @@ def _unswitch(record, journal):
     _reverse_rewrites(record)
     _remove_targets(record)
     journal.remove(record["id"])
+
+
+def relocate(tool, root, folders, files, rewrites, journal, progress=None, cancel=None, names=None, same_drive_ok=False):
+    check = preflight.run(folders[0][0], root, journal, tool, same_drive_ok, names, folders[0][1])
+    if check.problems:
+        raise MoveError("; ".join(check.problems))
+    paused = _paused(journal, folders[0][0])
+    record = paused or _record(tool, root, folders, files, rewrites, check)
+    record["state"] = "copying"
+    journal.put(record)
+    try:
+        _copy_everything(record, progress, cancel, bool(paused))
+    except Cancelled:
+        record["state"] = preflight.PAUSED
+        journal.put(record)
+        raise
+    except BaseException as error:
+        _remove_targets(record)
+        journal.remove(record["id"])
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']}: {error}") from error
+        raise
+    record["state"] = "switching"
+    journal.put(record)
+    try:
+        _switch(record)
+    except BaseException as error:
+        _unswitch(record, journal)
+        if isinstance(error, OSError):
+            raise MoveError(f"{record['name']} is in use, so nothing was changed: {error}") from error
+        raise
+    record["state"] = "moved"
+    journal.put(record)
+    return record
