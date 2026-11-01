@@ -54,3 +54,20 @@ class Journal:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, self.path)
+
+    @contextmanager
+    def lock(self):
+        handle = open(os.path.join(self.folder, "lock"), "a+b")
+        try:
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise Busy("Mixly is already moving something") from error
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
