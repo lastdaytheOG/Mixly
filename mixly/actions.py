@@ -10,8 +10,8 @@ def move_found(found, root, journal, store, progress=None, cancel=None):
 def undo_record(record, journal, store, progress=None, cancel=None):
     if record["kind"] == "wsl":
         wsl.undo(record["id"], journal)
-    else:
-        mover.undo(record["id"], journal, store, progress, cancel)
+        return f"{record['name']} is back where it started."
+    return mover.undo(record["id"], journal, store, progress, cancel)
 
 
 def finish_record(record, journal, remove_pointer=False):
