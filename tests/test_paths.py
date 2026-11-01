@@ -41,6 +41,16 @@ class ProtectedTests(unittest.TestCase):
         for name in ("Common Files", "Windows Defender", "Microsoft Office", "dotnet"):
             self.assertIsNotNone(protected_reason(os.path.join(os.environ["ProgramFiles"], name)), name)
 
+    def test_wsl_itself_stays(self):
+        self.assertIsNotNone(protected_reason(os.path.join(os.environ["ProgramFiles"], "WSL")))
+
+    def test_program_files_explains_itself_clearly(self):
+        reason = protected_reason(os.environ["ProgramFiles(x86)"])
+        self.assertTrue(reason.endswith("belongs to Windows"))
+
+    def test_store_app_data_stays(self):
+        self.assertIsNotNone(protected_reason(os.path.join(os.environ["LOCALAPPDATA"], "Packages", "Some.App")))
+
     def test_refuses_hardware_software(self):
         path = os.path.join(os.environ["ProgramFiles"], "NVIDIA Corporation", "Installer2", "Display.Driver")
         self.assertIn("hardware support", protected_reason(path))
