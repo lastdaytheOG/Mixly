@@ -51,3 +51,37 @@ def target_for(root, source):
 def rebase(path, old_root, new_root):
     relative = full(path)[len(key(old_root)):].lstrip("\\/")
     return os.path.join(full(new_root), relative) if relative else full(new_root)
+
+
+def _system_roots():
+    drive = os.environ.get("SystemDrive", "C:") + "\\"
+    names = ("windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData")
+    roots = [os.environ[name] for name in names if os.environ.get(name)]
+    roots += [os.path.join(drive, name) for name in ("Recovery", "Boot", "$Recycle.Bin", "System Volume Information")]
+    return roots
+
+
+def _profile_roots():
+    drive = os.environ.get("SystemDrive", "C:") + "\\"
+    profile = os.environ.get("USERPROFILE", os.path.join(drive, "Users"))
+    return [
+        os.path.join(drive, "Users"),
+        profile,
+        os.path.join(profile, "AppData"),
+        os.path.join(profile, "AppData", "LocalLow"),
+        os.environ.get("APPDATA", os.path.join(profile, "AppData", "Roaming")),
+        os.environ.get("LOCALAPPDATA", os.path.join(profile, "AppData", "Local")),
+    ]
+
+
+def protected_reason(path):
+    value = full(path)
+    if os.path.dirname(value) == value:
+        return "a whole drive can't be moved"
+    for root in _system_roots():
+        if is_within(value, root):
+            return f"{root} belongs to Windows"
+    for root in _profile_roots():
+        if is_within(root, value):
+            return f"{value} holds {root}, which has to stay where it is"
+    return None
