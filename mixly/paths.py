@@ -12,6 +12,12 @@ SHARED_FOLDERS = (
     "msbuild",
     "uninstall information",
     "installshield installation information",
+    "wsl",
+    "xboxservice",
+    "application verifier",
+    "iis",
+    "iis express",
+    "msecache",
 )
 HARDWARE_FOLDERS = (
     "nvidia corporation",
@@ -90,6 +96,7 @@ def _system_roots():
             roots.append(os.path.join(os.environ[name], "Microsoft"))
     if os.environ.get("LOCALAPPDATA"):
         roots.append(os.path.join(os.environ["LOCALAPPDATA"], "Package Cache"))
+        roots.append(os.path.join(os.environ["LOCALAPPDATA"], "Packages"))
     return roots
 
 
@@ -98,6 +105,8 @@ def _program_files_reason(value):
     for root in (os.environ[name] for name in names if os.environ.get(name)):
         if not is_within(value, root) and not is_within(root, value):
             continue
+        if key(root) == key(value):
+            return f"{root} belongs to Windows"
         if is_within(root, value):
             return f"{value} holds {root}, which has to stay where it is"
         first = full(value)[len(key(root)):].lstrip("\\/").split(os.sep)[0].lower()
