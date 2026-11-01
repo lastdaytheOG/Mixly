@@ -2,6 +2,34 @@ import os
 
 EXTENDED = "\\\\?\\"
 EXTENDED_UNC = "\\\\?\\UNC\\"
+STORE_FOLDERS = ("windowsapps", "modifiablewindowsapps")
+SHARED_FOLDERS = (
+    "common files",
+    "internet explorer",
+    "dotnet",
+    "packagemanagement",
+    "reference assemblies",
+    "msbuild",
+    "uninstall information",
+    "installshield installation information",
+)
+HARDWARE_FOLDERS = (
+    "nvidia corporation",
+    "nvidia",
+    "intel",
+    "amd",
+    "ati technologies",
+    "realtek",
+    "lenovo",
+    "dell",
+    "hp",
+    "hewlett-packard",
+    "asus",
+    "acer",
+    "msi",
+    "razer",
+    "logitech",
+)
 
 
 def full(path):
@@ -55,10 +83,31 @@ def rebase(path, old_root, new_root):
 
 def _system_roots():
     drive = os.environ.get("SystemDrive", "C:") + "\\"
-    names = ("windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData")
-    roots = [os.environ[name] for name in names if os.environ.get(name)]
+    roots = [os.environ[name] for name in ("windir", "ProgramData") if os.environ.get(name)]
     roots += [os.path.join(drive, name) for name in ("Recovery", "Boot", "$Recycle.Bin", "System Volume Information")]
+    for name in ("LOCALAPPDATA", "APPDATA"):
+        if os.environ.get(name):
+            roots.append(os.path.join(os.environ[name], "Microsoft"))
+    if os.environ.get("LOCALAPPDATA"):
+        roots.append(os.path.join(os.environ["LOCALAPPDATA"], "Package Cache"))
     return roots
+
+
+def _program_files_reason(value):
+    names = ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432")
+    for root in (os.environ[name] for name in names if os.environ.get(name)):
+        if not is_within(value, root) and not is_within(root, value):
+            continue
+        if is_within(root, value):
+            return f"{value} holds {root}, which has to stay where it is"
+        first = full(value)[len(key(root)):].lstrip("\\/").split(os.sep)[0].lower()
+        if first in STORE_FOLDERS:
+            return "Store and Xbox apps can only be moved from Windows Settings"
+        if first.startswith(("windows", "microsoft")) or first in SHARED_FOLDERS:
+            return f"{first} belongs to Windows"
+        if first in HARDWARE_FOLDERS:
+            return f"{first} is hardware support software"
+    return None
 
 
 def _profile_roots():
@@ -81,6 +130,11 @@ def protected_reason(path):
     for root in _system_roots():
         if is_within(value, root):
             return f"{root} belongs to Windows"
+    if is_within(value, os.path.join(os.environ.get("SystemDrive", "C:") + "\\", "XboxGames")):
+        return "Store and Xbox apps can only be moved from Windows Settings"
+    reason = _program_files_reason(value)
+    if reason:
+        return reason
     for root in _profile_roots():
         if is_within(root, value):
             return f"{value} holds {root}, which has to stay where it is"
