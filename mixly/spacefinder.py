@@ -1,5 +1,6 @@
 import os
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import services
@@ -8,6 +9,8 @@ from .paths import key, long_path, protected_reason, strip_extended
 from .scan import LARGE, STAYS, Found
 
 GIGABYTE = 1024 ** 3
+SPLIT_DEPTH = 3
+WORKERS = 8
 
 
 @dataclass
@@ -16,13 +19,14 @@ class Node:
     size: int = 0
     children: list = field(default_factory=list)
     files: list = field(default_factory=list)
+    waiting: list = field(default_factory=list)
 
 
 def _is_reparse(info):
     return bool(info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
-def read_tree(path, minimum, on_folder=None, cancel=None):
+def _read(path, minimum, on_folder, cancel, depth, pool):
     node = Node(os.path.abspath(path))
     if cancel is not None and cancel.is_set():
         raise Cancelled()
@@ -32,6 +36,7 @@ def read_tree(path, minimum, on_folder=None, cancel=None):
         entries = list(os.scandir(long_path(path)))
     except OSError:
         return node
+    waiting = []
     for entry in entries:
         try:
             info = entry.stat(follow_symlinks=False)
@@ -40,14 +45,43 @@ def read_tree(path, minimum, on_folder=None, cancel=None):
         if _is_reparse(info) and stat.S_ISDIR(info.st_mode):
             continue
         if stat.S_ISDIR(info.st_mode):
-            child = read_tree(strip_extended(entry.path), minimum, on_folder, cancel)
-            node.size += child.size
-            if child.size >= minimum:
-                node.children.append(child)
+            folder = strip_extended(entry.path)
+            if pool is None:
+                _attach(node, _read(folder, minimum, on_folder, cancel, depth + 1, None), minimum)
+            elif depth + 1 >= SPLIT_DEPTH:
+                waiting.append(pool.submit(_read, folder, minimum, on_folder, cancel, depth + 1, None))
+            else:
+                waiting.append(_read(folder, minimum, on_folder, cancel, depth + 1, pool))
         else:
             node.size += info.st_size
             if info.st_size >= minimum:
                 node.files.append((strip_extended(entry.path), info.st_size))
+    node.waiting = waiting
+    return node
+
+
+def _attach(node, child, minimum):
+    node.size += child.size
+    if child.size >= minimum:
+        node.children.append(child)
+
+
+def _resolve(node, minimum):
+    for item in node.waiting:
+        child = item.result() if hasattr(item, "result") else item
+        _resolve(child, minimum)
+        _attach(node, child, minimum)
+    node.waiting = []
+
+
+def read_tree(path, minimum, on_folder=None, cancel=None):
+    with ThreadPoolExecutor(WORKERS) as pool:
+        try:
+            node = _read(path, minimum, on_folder, cancel, 0, pool)
+            _resolve(node, minimum)
+        except Cancelled:
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
     return node
 
 
