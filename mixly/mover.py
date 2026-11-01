@@ -115,3 +115,23 @@ def move(source, root, journal, store, tool=None, progress=None, cancel=None, sa
     record["state"] = "moved"
     journal.put(record)
     return record
+
+
+def finish(record_id, journal, remove_pointer=False):
+    record = journal.get(record_id)
+    if record["kind"] != "folder" or record["state"] not in MOVED_STATES:
+        raise MoveError(f"{record['name']} can't be finished from state {record['state']}")
+    if not os.path.isdir(record["target"]):
+        raise MoveError(f"{record['target']} is missing")
+    if record["pointer"]:
+        if not is_junction(record["source"]) or key(link_target(record["source"])) != key(record["target"]):
+            raise MoveError(f"{record['source']} no longer points to {record['target']}")
+    if remove_pointer and record["pointer"] and not can_remove_pointer(record):
+        raise MoveError(f"{record['name']} needs its link to keep working")
+    remove_tree(record["backup"])
+    if remove_pointer and record["pointer"]:
+        remove_junction(record["source"])
+        record["pointer"] = False
+    record["state"] = "finished"
+    journal.put(record)
+    return record
