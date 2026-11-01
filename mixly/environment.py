@@ -67,3 +67,59 @@ def rewrite_path(value, old_root, new_root):
         else:
             entries.append(entry)
     return ";".join(entries), changed
+
+
+def plan_changes(store, source, target, tool_env=()):
+    changes = []
+    path_changed = False
+    current = store.items()
+    for name, (value, kind) in current.items():
+        if name.upper() == "PATH":
+            continue
+        expanded = os.path.expandvars(value)
+        if os.path.isabs(expanded) and is_within(expanded, source):
+            changes.append({"name": name, "before": [value, kind], "after": rebase(expanded, source, target), "kind": kind})
+    named = {change["name"].upper() for change in changes}
+    for name in tool_env:
+        if name.upper() in named:
+            continue
+        existing = next((key for key in current if key.upper() == name.upper()), None)
+        before = list(current[existing]) if existing else None
+        changes.append({"name": existing or name, "before": before, "after": full(target), "kind": before[1] if before else REG_SZ})
+    path_entry = next((key for key in current if key.upper() == "PATH"), None)
+    if path_entry:
+        _, path_changed = rewrite_path(current[path_entry][0], source, target)
+    return {"values": changes, "path": path_changed}
+
+
+def apply_changes(store, plan, source, target):
+    for change in plan["values"]:
+        store.set(change["name"], change["after"], change["kind"])
+    if plan["path"]:
+        _rewrite_store_path(store, source, target)
+    store.broadcast()
+
+
+def restore_changes(store, plan, source, target):
+    for change in plan["values"]:
+        current = store.get(change["name"])
+        if current is None or current[0] != change["after"]:
+            continue
+        if change["before"] is None:
+            store.delete(change["name"])
+        else:
+            store.set(change["name"], change["before"][0], change["before"][1])
+    if plan["path"]:
+        _rewrite_store_path(store, target, source)
+    store.broadcast()
+
+
+def _rewrite_store_path(store, old_root, new_root):
+    current = store.items()
+    name = next((key for key in current if key.upper() == "PATH"), None)
+    if name is None:
+        return
+    value, kind = current[name]
+    updated, changed = rewrite_path(value, old_root, new_root)
+    if changed:
+        store.set(name, updated, kind)
