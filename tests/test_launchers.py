@@ -114,3 +114,90 @@ class SteamCase(TempCase):
         with mock.patch("mixly.launchers.games.steam_libraries", return_value=[r"C:\Steam", r"D:\SteamLibrary"]):
             self.assertEqual(launchers.steam_library_on("D:", r"C:\Steam"), r"D:\SteamLibrary")
             self.assertIsNone(launchers.steam_library_on("E:", r"C:\Steam"))
+
+
+class EpicCase(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.journal = Journal(self.path("home"))
+        self.source = self.path("c", "Epic Games", "Fort")
+        self.write("c/Epic Games/Fort/.egstore/a.manifest", "m")
+        self.write("c/Epic Games/Fort/game.exe", "exe")
+        self.write("manifests/one.item", json.dumps({
+            "InstallLocation": self.source,
+            "ManifestLocation": self.source + "/.egstore",
+            "StagingLocation": self.source + "/.egstore/bps",
+            "AppName": "fort",
+            "Other": self.source + "2",
+        }))
+        self.write("launcher/LauncherInstalled.dat", json.dumps({"InstallationList": [
+            {"InstallLocation": self.source, "AppName": "fort"},
+            {"InstallLocation": self.path("c", "Epic Games", "Other"), "AppName": "other"},
+        ]}))
+        self.tool = Tool("epic:fort", "Fort", self.source, (), ("EpicGamesLauncher.exe",))
+
+    def move(self, **options):
+        options.setdefault("names", set())
+        return launchers.move_epic(
+            self.tool,
+            self.path("d"),
+            self.journal,
+            manifests=self.path("manifests"),
+            launcher_file=self.path("launcher", "LauncherInstalled.dat"),
+            same_drive_ok=True,
+            **options,
+        )
+
+    def item(self):
+        with open(self.path("manifests", "one.item"), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def dat(self):
+        with open(self.path("launcher", "LauncherInstalled.dat"), encoding="utf-8") as handle:
+            return json.load(handle)["InstallationList"]
+
+    def test_records_point_at_the_new_place_with_no_link(self):
+        record = self.move()
+        target = self.path("d", "Epic Games", "Fort")
+        self.assertEqual(record["target"], target)
+        self.assertTrue(os.path.exists(os.path.join(target, "game.exe")))
+        self.assertEqual(self.item()["InstallLocation"], target)
+        self.assertEqual(self.item()["ManifestLocation"], target + "/.egstore")
+        self.assertEqual(self.item()["StagingLocation"], target + "/.egstore/bps")
+        self.assertEqual(self.dat()[0]["InstallLocation"], target)
+        self.assertFalse(os.path.lexists(self.source))
+
+    def test_similar_paths_and_other_games_are_left_alone(self):
+        self.move()
+        self.assertEqual(self.item()["Other"], self.source + "2")
+        self.assertEqual(self.dat()[1]["InstallLocation"], self.path("c", "Epic Games", "Other"))
+
+    def test_undo_restores_files_and_records(self):
+        record = self.move()
+        launchers.undo(record["id"], self.journal, names=set())
+        self.assertEqual(self.item()["InstallLocation"], self.source)
+        self.assertEqual(self.item()["ManifestLocation"], self.source + "/.egstore")
+        self.assertEqual(self.dat()[0]["InstallLocation"], self.source)
+        self.assertTrue(os.path.exists(os.path.join(self.source, "game.exe")))
+        self.assertFalse(os.path.exists(self.path("d", "Epic Games", "Fort")))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_failed_switch_restores_records(self):
+        with mock.patch("mixly.launchers.os.rename", side_effect=[PermissionError("locked")]):
+            with self.assertRaises(MoveError):
+                self.move()
+        self.assertEqual(self.item()["InstallLocation"], self.source)
+        self.assertEqual(self.dat()[0]["InstallLocation"], self.source)
+        self.assertTrue(os.path.exists(os.path.join(self.source, "game.exe")))
+        self.assertFalse(os.path.exists(self.path("d", "Epic Games", "Fort")))
+        self.assertEqual(self.journal.records(), [])
+
+    def test_a_game_with_no_record_is_refused(self):
+        self.tool = Tool("epic:other", "Other", self.path("c", "Epic Games", "Other"))
+        os.makedirs(self.tool.source)
+        with self.assertRaises(MoveError):
+            self.move()
+
+    def test_never_leaves_a_junction(self):
+        self.move()
+        self.assertFalse(is_junction(self.source))
