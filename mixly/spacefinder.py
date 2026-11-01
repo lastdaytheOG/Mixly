@@ -91,3 +91,21 @@ def pick(node, minimum, results=None, containers=None):
         return chosen
     chosen.append((node.path, node.size, ""))
     return chosen
+
+
+def find(root, journal, minimum=GIGABYTE, listing=None, on_folder=None, cancel=None):
+    tree = read_tree(root, minimum, on_folder, cancel)
+    available = services.list_services() if listing is None else listing
+    states = {record["source"].lower(): record["state"] for record in journal.records()}
+    found = []
+    for path, size, reason in sorted(pick(tree, minimum), key=lambda entry: -entry[1]):
+        drivers = [service for service in services.in_folder(path, available) if service.must_stay]
+        if drivers and not reason:
+            reason = f"Windows needs {drivers[0].name} early in startup"
+        status = STAYS if reason else "ready"
+        if path.lower() in states:
+            status = "paused" if states[path.lower()] == "paused" else "moved"
+        found.append(Found(path, os.path.basename(path) or path, path, size, status, category=LARGE, reason=reason))
+    for path, size in sorted(tree.files, key=lambda entry: -entry[1]):
+        found.append(Found(path, os.path.basename(path), path, size, STAYS, category=LARGE, reason="Windows needs this file on its own drive"))
+    return found
