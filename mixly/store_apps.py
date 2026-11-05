@@ -59,7 +59,10 @@ def parse_list(text):
     clean = (text or "").strip()
     if not clean:
         return []
-    data = json.loads(clean)
+    try:
+        data = json.loads(clean)
+    except (ValueError, json.JSONDecodeError):
+        return []
     return [data] if isinstance(data, dict) else data
 
 

@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest import mock
 
-from mixly import actions, browser, spacefinder, theme, trash, volumes
+from mixly import acl, actions, browser, cli, spacefinder, theme, trash, volumes
 from mixly.catalog import Tool
 from mixly.copier import copy_file_verified, CopyError
 from mixly.journal import Journal
@@ -28,6 +28,13 @@ class ThemeTests(unittest.TestCase):
             self.assertGreaterEqual(theme.contrast(palette.attention, palette.surface), 4.5, palette.name)
             self.assertGreaterEqual(theme.contrast(palette.accent, palette.surface), 4.5, palette.name)
 
+    def test_dark_title_bar_uses_own_hwnd_if_parent_is_zero(self):
+        window = mock.Mock()
+        window.winfo_id.return_value = 1234
+        with mock.patch("ctypes.windll.user32.GetParent", return_value=0):
+            with mock.patch("ctypes.windll.dwmapi.DwmSetWindowAttribute", return_value=0) as dwm:
+                theme.dark_title_bar(window, True)
+                self.assertEqual(dwm.call_args[0][0], 1234)
 
 class SizeCacheTests(TempCase):
     def test_survives_a_restart(self):
@@ -163,6 +170,20 @@ class ActionTests(TempCase):
         move.assert_called_once()
         self.assertEqual(found.status, "ready")
 
+    def test_reveal_quotes_path_for_explorer(self):
+        path = self.write("folder with spaces/file.txt")
+        with mock.patch("subprocess.Popen") as popen:
+            actions.reveal(path)
+            popen.assert_called_once_with(f'explorer /select,"{os.path.abspath(path)}"')
+
+    def test_progress_zero_total_does_not_raise(self):
+        progress = cli._Progress()
+        progress(0, 0)
+        self.assertEqual(progress.last, 0)
+
+    def test_copy_root_permissions_ignores_oserror_on_non_ntfs(self):
+        with mock.patch("mixly.acl.read_dacl", side_effect=OSError("Not supported")):
+            acl.copy_root_permissions(r"C:\src", r"D:\dst")
 
 class SpaceSpeedTests(TempCase):
     def test_parallel_reading_matches_a_simple_total(self):

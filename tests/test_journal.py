@@ -32,3 +32,11 @@ class JournalTests(TempCase):
                     pass
         with journal.lock():
             pass
+    def test_corrupted_or_empty_journal_returns_empty_list(self):
+        journal = Journal(self.base)
+        self.write("journal.json", "")
+        self.assertEqual(journal.records(), [])
+        self.write("journal.json", "{corrupt json")
+        self.assertEqual(journal.records(), [])
+        self.write("journal.json", "{}")
+        self.assertEqual(journal.records(), [])

@@ -157,12 +157,15 @@ def discover(journal, tools=CATALOG, include_wsl=True, on_found=None, include_in
     listing = _service_listing()
     results = []
     seen = []
+    seen_ids = set()
 
     def emit(found):
+        if found.id in seen_ids:
+            return
+        seen_ids.add(found.id)
         results.append(found)
         if on_found is not None:
             on_found(found)
-
     def add(tool, category, minimum=0, skip_parents=False):
         if any(is_within(tool.source, known) for known in seen):
             return

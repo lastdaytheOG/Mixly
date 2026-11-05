@@ -560,7 +560,7 @@ class App(ttk.Frame):
 
     def _on_heading(self, column):
         if column == "pick":
-            shown = [row for row in self.tree.get_children() if self.rows[row].status in TICKABLE]
+            shown = [row for row in self.tree.get_children() if row in self.rows and self.rows[row].status in TICKABLE]
             everything = bool(shown) and all(row in self.checked for row in shown)
             for row in shown:
                 if everything == (row in self.checked):
@@ -608,14 +608,14 @@ class App(ttk.Frame):
         found = self.rows[row]
         menu = self.row_menu
         menu.delete(0, "end")
-        menu.add_command(label="Show in File Explorer", command=lambda: actions.reveal(found.source))
-        menu.add_command(label="Copy path", command=lambda: self._copy_path(found.source))
+        menu.add_command(label="Show in File Explorer", command=lambda src=found.source: actions.reveal(src))
+        menu.add_command(label="Copy path", command=lambda src=found.source: self._copy_path(src))
         if found.category in (DEVELOPER, DATA, LARGE, FILES) and found.status in MOVABLE:
             menu.add_separator()
             menu.add_command(label="Delete\u2026", command=self.start_delete)
         if found.category in (APPS, GAMES, STORE):
             menu.add_separator()
-            menu.add_command(label="Uninstall\u2026", command=lambda: self.start_uninstall([found]))
+            menu.add_command(label="Uninstall\u2026", command=lambda item=found: self.start_uninstall([item]))
         menu.tk_popup(event.x_root, event.y_root)
 
     def _copy_path(self, path):
@@ -767,7 +767,7 @@ class App(ttk.Frame):
             self.needs_sort = False
             selection = self.tree.selection()
             top = self.tree.yview()[0]
-            shown = [self.rows[row] for row in self.tree.get_children()]
+            shown = [self.rows[row] for row in self.tree.get_children() if row in self.rows]
             shown.sort(key=self._sort_key, reverse=self.sort_reverse)
             for index, found in enumerate(shown):
                 self.tree.move(found.id, "", index)
@@ -847,7 +847,7 @@ class App(ttk.Frame):
         self.poll = self.after(40, self._drain)
 
     def _report_progress(self, done, total):
-        self.events.put(("progress", done * 100 / total))
+        self.events.put(("progress", (done * 100 / total) if total else 0))
 
     def _load_moved(self):
         for row in [row for row, found in self.rows.items() if found.category == MOVED]:

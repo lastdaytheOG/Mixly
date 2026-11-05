@@ -2,7 +2,7 @@ import _winapi
 import os
 import stat
 
-from .paths import long_path, strip_extended
+from .paths import is_within, key, long_path, strip_extended
 
 
 def reparse_tag(path):
@@ -48,7 +48,13 @@ def _remove(path, info):
     if tag == stat.IO_REPARSE_TAG_MOUNT_POINT:
         os.rmdir(path)
     elif tag == stat.IO_REPARSE_TAG_SYMLINK:
-        os.unlink(path)
+        if stat.S_ISDIR(info.st_mode):
+            os.rmdir(path)
+        else:
+            try:
+                os.unlink(path)
+            except OSError:
+                os.rmdir(path)
     elif stat.S_ISDIR(info.st_mode):
         with os.scandir(path) as entries:
             children = [entry.path for entry in entries]
@@ -63,8 +69,7 @@ def _remove(path, info):
 
 def prune_empty(path, stop):
     current = os.path.dirname(os.path.abspath(path))
-    limit = os.path.normcase(os.path.abspath(stop))
-    while os.path.normcase(current).startswith(limit) and os.path.normcase(current) != limit:
+    while is_within(current, stop) and key(current) != key(stop):
         try:
             os.rmdir(long_path(current))
         except OSError:

@@ -48,6 +48,8 @@ class StoreTests(TempCase):
 
     def test_parse_handles_nothing_and_many(self):
         self.assertEqual(store_apps.parse_list(""), [])
+        self.assertEqual(store_apps.parse_list("Get-AppxPackage : Access is denied"), [])
+        self.assertEqual(store_apps.parse_list("{bad json"), [])
         self.assertEqual(len(store_apps.parse_list('[{"name":"a"},{"name":"b"}]')), 2)
 
     def test_move_uses_windows_and_records_it(self):

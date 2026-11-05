@@ -13,7 +13,8 @@ def home():
     override = os.environ.get("MIXLY_HOME")
     if override:
         return override
-    return os.path.join(os.environ["LOCALAPPDATA"], "Mixly")
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "Mixly")
 
 
 def new_id():
@@ -29,10 +30,10 @@ class Journal:
     def records(self):
         try:
             with open(self.path, encoding="utf-8") as handle:
-                return json.load(handle)["records"]
-        except FileNotFoundError:
+                data = json.load(handle)
+                return data["records"] if isinstance(data, dict) and isinstance(data.get("records"), list) else []
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError, KeyError):
             return []
-
     def get(self, record_id):
         for record in self.records():
             if record["id"] == record_id:

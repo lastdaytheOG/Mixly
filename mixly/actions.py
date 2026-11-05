@@ -4,7 +4,6 @@ import subprocess
 from . import caches, content, known, launchers, mover, store_apps, trash, volumes, wsl
 from .copier import CopyError
 from .journal import Busy
-from .links import is_junction
 from .services import ServiceError
 
 ERRORS = (mover.MoveError, wsl.WslError, CopyError, ServiceError, OSError, Busy, KeyError)
@@ -127,4 +126,4 @@ def uninstall(found):
 
 def reveal(path):
     if os.path.exists(path):
-        subprocess.Popen(["explorer", f"/select,{os.path.abspath(path)}"])
+        subprocess.Popen(f'explorer /select,"{os.path.abspath(path)}"')

@@ -16,6 +16,14 @@ class AppDataTests(TempCase):
         tools = data_folders([self.path("local")])
         self.assertEqual([(tool.id, tool.name) for tool in tools], [("data:Telegram", "Telegram data")])
 
+    def test_duplicate_folders_across_parents_are_disambiguated(self):
+        os.makedirs(self.path("local", "Google"))
+        os.makedirs(self.path("roaming", "Google"))
+        tools = data_folders([self.path("local"), self.path("roaming")])
+        self.assertEqual(
+            [(tool.id, tool.name) for tool in tools],
+            [("data:Google", "Google (local) data"), ("data:Google:roaming", "Google (roaming) data")],
+        )
     def test_finds_save_folders(self):
         os.makedirs(self.path("home", "Saved Games"))
         os.makedirs(self.path("home", "Documents", "My Games"))

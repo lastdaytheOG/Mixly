@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from mixly.paths import is_within, long_path, normalize_root, protected_reason, rebase, strip_extended, target_for
+from mixly.paths import full, is_within, long_path, normalize_root, protected_reason, rebase, strip_extended, target_for
 
 
 class PathTests(unittest.TestCase):
@@ -26,6 +26,9 @@ class PathTests(unittest.TestCase):
     def test_rebase(self):
         self.assertEqual(rebase(r"C:\old\bin", r"C:\old", r"D:\new"), r"D:\new\bin")
         self.assertEqual(rebase(r"C:\old", r"C:\old", r"D:\new"), r"D:\new")
+    def test_full_drive_letter(self):
+        self.assertEqual(full("C:"), "C:\\")
+        self.assertEqual(rebase(r"C:\bin", "C:", r"D:\new"), r"D:\new\bin")
 
 
 class ProtectedTests(unittest.TestCase):

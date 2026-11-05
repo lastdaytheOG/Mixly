@@ -3,7 +3,6 @@ import os
 import sys
 
 from . import __version__, actions, planner, spacefinder, volumes
-from .catalog import by_id
 from .copier import Cancelled
 from .environment import RegistryEnv
 from .journal import Journal
@@ -83,7 +82,7 @@ class _Progress:
         self.last = -1
 
     def __call__(self, done, total):
-        percent = done * 100 // total
+        percent = (done * 100 // total) if total else 0
         if percent != self.last:
             self.last = percent
             print(f"\r  {percent:>3}%", end="", flush=True)

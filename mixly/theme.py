@@ -115,7 +115,8 @@ def current():
 
 def dark_title_bar(window, enabled):
     try:
-        handle = ctypes.windll.user32.GetParent(window.winfo_id())
+        raw = window.winfo_id()
+        handle = ctypes.windll.user32.GetParent(raw) or raw
         value = ctypes.c_int(1 if enabled else 0)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
     except (OSError, AttributeError):

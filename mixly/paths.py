@@ -39,7 +39,10 @@ HARDWARE_FOLDERS = (
 
 
 def full(path):
-    return os.path.abspath(os.path.expandvars(os.fspath(path)))
+    value = os.path.expandvars(os.fspath(path)).strip()
+    if len(value) == 2 and value[1] == ":":
+        value += "\\"
+    return os.path.abspath(value)
 
 
 def key(path):

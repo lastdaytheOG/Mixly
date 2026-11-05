@@ -34,7 +34,7 @@ def problem_with(path, journal):
         if is_within(folder, source):
             return f"{source} is a Windows folder, so choose what's inside it instead"
     for own in (sys.executable, os.path.abspath(__file__), os.getcwd()):
-        if is_within(own, source):
+        if is_within(own, source) or is_within(source, own):
             return f"{source} is in use by Mixly itself"
     for record in journal.records():
         for known_path in (record.get("source"), record.get("target")):

@@ -117,6 +117,9 @@ class MoveTests(ContentCase):
     def test_something_mixly_already_moved_is_refused(self):
         self.journal.put({"id": "x", "kind": "folder", "source": self.folder, "target": self.path("other")})
         self.assertIn("overlaps", content.problem_with(self.folder, self.journal))
+    def test_mixly_own_files_are_refused(self):
+        own_file = os.path.abspath(__file__)
+        self.assertIn("in use by Mixly itself", content.problem_with(own_file, self.journal))
 
 
 class UndoTests(ContentCase):

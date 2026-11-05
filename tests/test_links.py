@@ -47,3 +47,7 @@ class LinkTests(TempCase):
         prune_empty(self.path("root", "a", "b", "gone"), self.path("root"))
         self.assertFalse(os.path.exists(self.path("root", "a")))
         self.assertTrue(os.path.exists(self.path("root")))
+    def test_prune_empty_never_touches_siblings_sharing_a_prefix(self):
+        os.makedirs(self.path("root_sibling", "inner"))
+        prune_empty(self.path("root_sibling", "inner", "file.txt"), self.path("root"))
+        self.assertTrue(os.path.exists(self.path("root_sibling", "inner")))

@@ -101,6 +101,9 @@ def lock_chain(top, folder):
 
 
 def copy_root_permissions(source, target):
-    sddl = standalone(read_dacl(source))
-    if sddl is not None:
-        write_dacl(target, sddl)
+    try:
+        sddl = standalone(read_dacl(source))
+        if sddl is not None:
+            write_dacl(target, sddl)
+    except OSError:
+        pass
