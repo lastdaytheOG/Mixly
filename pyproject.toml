@@ -1,6 +1,6 @@
 [project]
 name = "mixly"
-version = "0.3.0"
+version = "0.3.1"
 description = "Free up a full C: drive by moving tools, games, apps and folders and keeping them working"
 requires-python = ">=3.11"
 dependencies = []
